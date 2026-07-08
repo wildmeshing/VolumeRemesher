@@ -43,6 +43,9 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 	target_compile_options(${PROJECT_NAME}_lib PUBLIC "/Oi")
 # turn off annoying warnings
 	target_compile_options(${PROJECT_NAME}_lib PUBLIC "/D _CRT_SECURE_NO_WARNINGS")
+	target_compile_definitions(${PROJECT_NAME}_lib PRIVATE "_CRT_NONSTDC_NO_WARNINGS")
+	# workaround for known bug in C++17 on MSVC
+	target_compile_definitions(${PROJECT_NAME}_lib PRIVATE "_HAS_STD_BYTE=0")
 	# set target architecture
 	if(ENABLE_AVX2)
 		target_compile_options(${PROJECT_NAME}_lib PUBLIC "/arch:AVX2")
