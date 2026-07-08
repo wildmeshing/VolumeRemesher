@@ -111,7 +111,7 @@ target_include_directories(${PROJECT_NAME}_lib PUBLIC
 	${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(${PROJECT_NAME}_lib PUBLIC gmp::gmp)
-target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_20)
+target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_17)
 
 
 add_library(VolumeRemesher::VolumeRemesher ALIAS ${PROJECT_NAME}_lib)
