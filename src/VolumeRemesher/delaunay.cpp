@@ -168,7 +168,8 @@ void TetMesh::tetrahedrize()
 
 void TetMesh::saveTET(const char* filename)
 {
-    ofstream f(filename);
+    // Binary mode so line endings stay LF on every OS (byte-identical output).
+    ofstream f(filename, std::ios::binary);
 
     if (!f) ip_error("\nTetMesh::saveTET: FATAL ERROR cannot open the file.\n");
 
