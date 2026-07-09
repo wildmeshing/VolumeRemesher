@@ -51,13 +51,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 is Intel (x86_64); macos-latest is Apple Silicon (arm64).
-        # Building natively on each exercises both architectures.
-        os: [macos-13, macos-latest]
+        # macos-latest is Apple Silicon (arm64).
+        os: [macos-latest]
         config: [Debug, Release]
         include:
-          - os: macos-13
-            name: macOS-x86_64
           - os: macos-latest
             name: macOS-arm64
 
