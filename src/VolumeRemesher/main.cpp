@@ -348,5 +348,8 @@ int main(int argc, char** argv)
             triangulate);
     printf("Done.\n");
 
+    // make/remakePolyhedralMesh return an owning pointer; the caller must free it.
+    delete complex;
+
     return 0;
 }
