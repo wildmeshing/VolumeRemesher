@@ -37,9 +37,8 @@ jobs:
       - name: Build
         run: cd build; make -j2
 
-      - name: Tests
-        if: matrix.config == 'Debug'
-        run: cd build; ./mesh_generator
+      - name: Integration tests
+        run: cd build && ctest --output-on-failure
 
 
   ####################
@@ -47,17 +46,20 @@ jobs:
   ####################
 
   MacOS:
-    name: ${{ matrix.name }}-${{ matrix.arc }} (${{ matrix.config }})
+    name: ${{ matrix.name }} (${{ matrix.config }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest]
-        arc: [x86]
+        # macos-13 is Intel (x86_64); macos-latest is Apple Silicon (arm64).
+        # Building natively on each exercises both architectures.
+        os: [macos-13, macos-latest]
         config: [Debug, Release]
         include:
+          - os: macos-13
+            name: macOS-x86_64
           - os: macos-latest
-            name: macOS
+            name: macOS-arm64
 
     steps:
       - name: Checkout repository
@@ -65,29 +67,18 @@ jobs:
         with:
           fetch-depth: 10
 
-      - name: Configure x86
-        if: matrix.arc == 'x86'
+      - name: Configure
         run: |
           mkdir -p build
           cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=${{ matrix.config }}
 
-      - name: Configure arm64
-        if: matrix.arc == 'arm64'
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=${{ matrix.config }} \
-            -DCMAKE_OSX_ARCHITECTURES=arm64
-
       - name: Build
-        run: cd build; make -j2
+        run: cd build; make -j3
 
-      - name: Tests
-        if: matrix.config == 'Debug' && matrix.arc == 'x86'
-        run: cd build; ./mesh_generator
+      - name: Integration tests
+        run: cd build && ctest --output-on-failure
 
   ####################
   # Windows
@@ -118,8 +109,7 @@ jobs:
             -S .
           cmake --build build -j1
 
-      - name: Tests
-        if: matrix.config == 'Debug'
+      - name: Integration tests
         run: |
           cd build
-          .\\mesh_generator.exe
+          ctest --output-on-failure

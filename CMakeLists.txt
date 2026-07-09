@@ -144,3 +144,11 @@ if(${HAS_GMPXX})
 else()
 	MESSAGE(WARNING "No gmpxx supported")
 endif()
+
+
+# Integration tests (only when this is the top-level project)
+option(VOLUMEREMESHER_BUILD_TESTS "Build the integration test suite" ON)
+if(NOT HAS_PARENT AND VOLUMEREMESHER_BUILD_TESTS)
+	enable_testing()
+	add_subdirectory(tests)
+endif()
