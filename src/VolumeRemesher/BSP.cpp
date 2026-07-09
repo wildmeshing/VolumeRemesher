@@ -103,6 +103,12 @@ BSPedge BSPedge::split(uint32_t new_point)
         e.meshVertices[0] = meshVertices[0];
         e.meshVertices[1] = meshVertices[1];
         e.meshVertices[2] = UINT32_MAX;
+        // A mesh-edge keeps UINT32_MAX in positions 2..5 (see BSPedge ctor and
+        // the meshVertices invariant). The old code left [3..5] uninitialized,
+        // which edges_ShareCommonPlanes() later read -> nondeterministic result.
+        e.meshVertices[3] = UINT32_MAX;
+        e.meshVertices[4] = UINT32_MAX;
+        e.meshVertices[5] = UINT32_MAX;
     } else {
         e.meshVertices[0] = meshVertices[0];
         e.meshVertices[1] = meshVertices[1];

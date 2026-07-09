@@ -231,7 +231,20 @@ public:
 
     ~BSPcomplex()
     {
-        for (genericPoint* v : vertices) delete v;
+        // vertices hold genericPoint* to concrete 3D point subtypes. genericPoint
+        // has a non-virtual destructor by design (manual type dispatch, no vtable),
+        // so deleting through the base pointer is a sized-delete mismatch (UB).
+        // Delete through the concrete type instead.
+        for (genericPoint* v : vertices) {
+            if (v->isExplicit3D())
+                delete &v->toExplicit3D();
+            else if (v->isLPI())
+                delete &v->toLPI();
+            else if (v->isTPI())
+                delete &v->toTPI();
+            else
+                delete v;
+        }
     }
 
     // Save the faces representing the input constraints

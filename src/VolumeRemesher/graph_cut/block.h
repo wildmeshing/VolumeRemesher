@@ -106,7 +106,7 @@ public:
 	Block(int size, void (*err_function)(char *) = NULL) { first = last = NULL; block_size = size; error_function = err_function; }
 
 	/* Destructor. Deallocates all items added so far */
-	~Block() { while (first) { block *next = first -> next; delete first; first = next; } }
+	~Block() { while (first) { block *next = first -> next; delete[] (char*)first; first = next; } }
 
 	/* Allocates 'num' consecutive items; returns pointer
 	   to the first item. 'num' cannot be greater than the
@@ -121,7 +121,7 @@ public:
 			else
 			{
 				block *next = (block *) new char [sizeof(block) + (block_size-1)*sizeof(Type)];
-				if (!next) { if (error_function) (*error_function)("Not enough memory!"); exit(1); }
+				if (!next) { if (error_function) (*error_function)((char *)"Not enough memory!"); exit(1); }
 				if (last) last -> next = next;
 				else first = next;
 				last = next;
@@ -209,7 +209,7 @@ public:
 	DBlock(int size, void (*err_function)(char *) = NULL) { first = NULL; first_free = NULL; block_size = size; error_function = err_function; }
 
 	/* Destructor. Deallocates all items added so far */
-	~DBlock() { while (first) { block *next = first -> next; delete first; first = next; } }
+	~DBlock() { while (first) { block *next = first -> next; delete[] (char*)first; first = next; } }
 
 	/* Allocates one item */
 	Type *New()
@@ -220,7 +220,7 @@ public:
 		{
 			block *next = first;
 			first = (block *) new char [sizeof(block) + (block_size-1)*sizeof(block_item)];
-			if (!first) { if (error_function) (*error_function)("Not enough memory!"); exit(1); }
+			if (!first) { if (error_function) (*error_function)((char *)"Not enough memory!"); exit(1); }
 			first_free = & (first -> data[0] );
 			for (item=first_free; item<first_free+block_size-1; item++)
 				item -> next_free = item + 1;
