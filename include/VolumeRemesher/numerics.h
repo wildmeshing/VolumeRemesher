@@ -107,6 +107,11 @@
 #endif
 #endif
 
+#ifdef STDCPLUSPLUS20
+#include <bit>
+#endif
+
+namespace vol_rem {
 inline void setFPUModeToRoundUP()
 {
     fesetround(FE_UPWARD);
@@ -126,7 +131,6 @@ inline void ip_error(const char* msg)
 }
 
 #ifdef STDCPLUSPLUS20
-#include <bit>
 inline int nfg_count_lz(uint32_t v)
 {
     return std::countl_zero(v);
@@ -157,8 +161,6 @@ inline int nfg_count_rz(uint32_t v)
     return z;
 }
 #endif
-
-namespace vol_rem {
 
 /////////////////////////////////////////////////////////////////////
 //
