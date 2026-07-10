@@ -2,6 +2,24 @@
 
 using namespace vol_rem;
 
+// Skip whitespace and '#'-comment lines (standard OFF allows them, e.g. files
+// exported by meshio) so the parser lands on the next real token.
+static void off_skip_comments(FILE* file)
+{
+    int c;
+    while ((c = fgetc(file)) != EOF) {
+        if (isspace(c))
+            continue;
+        if (c == '#') {
+            while ((c = fgetc(file)) != EOF && c != '\n')
+                ;
+            continue;
+        }
+        ungetc(c, file);
+        return;
+    }
+}
+
 void read_OFF_file(
     const char* filename,
     double** vertices_p,
@@ -27,7 +45,8 @@ void read_OFF_file(
             ip_error("read_OFF_file: FATAL ERROR "
                      "1st line of input file is different from OFF\n");
 
-    // Reading number of points and triangles.
+    // Reading number of points and triangles (skipping any comment lines).
+    off_skip_comments(file);
     if (fscanf(file, " %d %d %*d ", npts, ntri) == 0)
         ip_error("read_OFF_file: FATAL ERROR 2st line of "
                  "input file do not contanins point and triangles numbers.\n");
@@ -173,7 +192,6 @@ void read_MEDIT_file(
 /// <returns></returns>
 int main(int argc, char** argv)
 {
-#ifdef NDEBUG
     if (argc < 2) {
         printf("\nUsage: mesh_generator [-v | -l | -s | -b | -t] inputfile_A.off [bool_opcode "
                "inputfile_B.off]\n\n"
@@ -248,19 +266,6 @@ int main(int argc, char** argv)
             printf("Loading %s and %s.\n\n", fileA_name, fileB_name);
         }
     }
-#else
-    bool triangulate = false;
-    bool verbose = true;
-    bool logging = false;
-    bool surfmesh = false;
-    bool blackfaces = false;
-    const char* fileA_name =
-        "D:\\SYNC_DATA\\Sviluppo_Software\\Datasets\\Thingi10K\\off_meshes\\101213.off";
-    const char* fileB_name =
-        NULL; // "D:\\SYNC_DATA\\Sviluppo_Software\\My_Software\\GIT_REPOS\\VolumeRemesher\\models\\Octocat.bg.tet";
-    char bool_opcode = '0';
-    bool two_input = (bool_opcode != '0');
-#endif
 
     double *coords_A, *coords_B = NULL;
     uint32_t ncoords_A = 0, ncoords_B = 0;

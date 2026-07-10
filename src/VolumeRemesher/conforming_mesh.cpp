@@ -610,6 +610,33 @@ int half_edges_compare(const void* void_he1, const void* void_he2)
         return -1;
 }
 
+//  Input: pointer to two half-edges: he1, he2.
+// Output: strict total order — orders by edge endpoints (as half_edges_compare)
+//         and breaks ties by tri_ind.
+// Note. half_edges_compare returns 0 for every half-edge that shares the same
+//       edge endpoints (an edge shared by several constraints). qsort is NOT a
+//       stable sort, so sorting with it left those ties in an implementation-
+//       defined order. place_virtual_constraints then builds each virtual
+//       constraint from the FIRST half-edge of each same-edge group, so the
+//       virtual-constraint apex — and therefore the whole conforming mesh —
+//       depended on the C library's qsort tie-breaking: identical on glibc and
+//       macOS libc, but different on MSVC (which made some models produce a
+//       different tessellation on Windows). Sorting with this total order makes
+//       the representative half-edge (the one with the lowest tri_ind)
+//       deterministic on every platform. The grouping in place_virtual_constraints
+//       still uses the endpoints-only half_edges_compare, which stays correct
+//       because equal-endpoint half-edges remain contiguous after this sort.
+int half_edges_sort_compare(const void* void_he1, const void* void_he2)
+{
+    const int by_endpts = half_edges_compare(void_he1, void_he2);
+    if (by_endpts != 0) return by_endpts;
+    const half_edge_t* he1 = (half_edge_t*)void_he1;
+    const half_edge_t* he2 = (half_edge_t*)void_he2;
+    if (he1->tri_ind > he2->tri_ind) return 1;
+    if (he1->tri_ind < he2->tri_ind) return -1;
+    return 0;
+}
+
 //  Input: pointer to constraints,
 //         pointer to half-edges.
 // Output: fills the array half_edges of struct half_edge_t, for each constraint
@@ -658,7 +685,10 @@ void fill_half_edges(const constraints_t* constraints, half_edge_t* half_edges)
 //         increasing lexicographic order.
 void sort_half_edges(half_edge_t* half_edges, uint32_t num_half_edges)
 {
-    qsort(half_edges, num_half_edges, sizeof(half_edge_t), half_edges_compare);
+    // Use a strict total order (endpoints, then tri_ind) so the sort is fully
+    // deterministic across platforms; qsort with the endpoints-only comparator
+    // left same-edge half-edges in an implementation-defined order.
+    qsort(half_edges, num_half_edges, sizeof(half_edge_t), half_edges_sort_compare);
 }
 
 //  Input: index of an half-edge w.r.t. the array half_edges: he,

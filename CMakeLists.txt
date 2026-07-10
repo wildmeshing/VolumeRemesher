@@ -45,8 +45,6 @@ if(NOT ${HAS_SIMD_INSTRUCTIONS})
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-# optimize for speed
-	target_compile_options(${PROJECT_NAME}_lib PUBLIC /Ot)
 # grant IEEE 754 compliance
 	target_compile_options(${PROJECT_NAME}_lib PUBLIC "/fp:strict")
 # use intrinsic functions
@@ -56,11 +54,15 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 	target_compile_definitions(${PROJECT_NAME}_lib PRIVATE "_CRT_NONSTDC_NO_WARNINGS")
 	# workaround for known bug in C++17 on MSVC
 	target_compile_definitions(${PROJECT_NAME}_lib PRIVATE "_HAS_STD_BYTE=0")
-	# set target architecture
+	# set target architecture: /arch:AVX2 selects the SIMD interval_number path
+	# (as -mavx2 does on Linux and the NEON/SIMDe path on Apple Silicon). Verified
+	# to produce byte-identical, deterministic output vs the scalar path and vs
+	# Linux/macOS (the integration test suite passes on all three). /fp:strict +
+	# fenv_access keep the SIMD interval arithmetic rounding outward under
+	# FE_UPWARD. (This was disabled while an unrelated half-edge ordering
+	# nondeterminism made Windows diverge; that bug is now fixed in conforming_mesh.cpp.)
 	if(ENABLE_AVX2)
 		target_compile_options(${PROJECT_NAME}_lib PUBLIC "/arch:AVX2")
-	elseif(ENABLE_SSE2)
-		target_compile_options(${PROJECT_NAME}_lib PUBLIC "/arch:SSE2")
 	endif()
 # reserve enough stack size
 	target_link_options(${PROJECT_NAME}_lib PUBLIC "/STACK:8421376")
@@ -143,4 +145,12 @@ if(${HAS_GMPXX})
 	target_compile_definitions(${PROJECT_NAME}_lib PUBLIC USE_GNU_GMP_CLASSES)
 else()
 	MESSAGE(WARNING "No gmpxx supported")
+endif()
+
+
+# Integration tests (only when this is the top-level project)
+option(VOLUMEREMESHER_BUILD_TESTS "Build the integration test suite" ON)
+if(NOT HAS_PARENT AND VOLUMEREMESHER_BUILD_TESTS)
+	enable_testing()
+	add_subdirectory(tests)
 endif()

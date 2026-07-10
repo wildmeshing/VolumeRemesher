@@ -2847,7 +2847,8 @@ void BSPcomplex::saveSkin(const char* filename, const char bool_opcode, bool tri
         if (vrts_visit[i]) num_v++;
     }
 
-    ofstream f(filename);
+    // Binary mode so line endings stay LF on every OS (byte-identical output).
+    ofstream f(filename, std::ios::binary);
 
     if (!f) ip_error("BSPcomplex::saveSkin: cannot open the file.\n");
 
@@ -2885,7 +2886,8 @@ void BSPcomplex::saveSkin(const char* filename, const char bool_opcode, bool tri
 //
 void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tetrahedrize)
 {
-    ofstream f(filename);
+    // Binary mode so line endings stay LF on every OS (byte-identical output).
+    ofstream f(filename, std::ios::binary);
 
     if (!f) ip_error("\nBSPcomplex::[BSP.cpp]saveTetMesh: FATAL ERROR cannot open the file.\n");
 
@@ -2998,7 +3000,8 @@ void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tet
 
 void BSPcomplex::saveBlackFaces(const char* filename, bool triangulate)
 {
-    ofstream f(filename);
+    // Binary mode so line endings stay LF on every OS (byte-identical output).
+    ofstream f(filename, std::ios::binary);
 
     if (!f) ip_error("BSPcomplex::saveBlackFaces: cannot open the file.\n");
 
