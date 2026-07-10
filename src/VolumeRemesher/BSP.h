@@ -385,7 +385,7 @@ public:
     inline uint64_t triFace_oppEdge(const BSPface& face, uint32_t v);
     uint64_t triFace_shareEdge(const BSPcell& cell, uint64_t face_ind, uint64_t vOppEdge_ind);
     bool cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v);
-    void makeTetrahedra();
+    void makeTetrahedra(bool verbose = false);
 };
 
 /// <summary>
