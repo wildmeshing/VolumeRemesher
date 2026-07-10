@@ -31,11 +31,11 @@ void embed_tri_in_poly_mesh(
         verbose,
         true);
 
-    // TODOfix: triangulateFace can cause degenerate triangles!!!
-    for (size_t f_id = 0; f_id < complex->faces.size(); f_id++) {
-        complex->triangulateFace(f_id);
-    }
-    complex->makeTetrahedra(verbose);
+    // // TODOfix: triangulateFace can cause degenerate triangles!!!
+    // for (size_t f_id = 0; f_id < complex->faces.size(); f_id++) {
+    //     complex->triangulateFace(f_id);
+    // }
+    // complex->makeTetrahedra(verbose);
 
     if (verbose) printf("Producing vertices...\n");
     // Get exact vertex coordinates
