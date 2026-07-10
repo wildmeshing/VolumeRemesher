@@ -2335,13 +2335,29 @@ void BSPcomplex::triangulateFace(uint64_t face_ind)
             triangle_detach(face_ind);
             num_face_edges--;
             shifts_since_clip = 0;
+        } else if (++shifts_since_clip > num_face_edges) {
+            // One full rotation without a valid clip: the face has no positive-area
+            // triangulation (a genuinely zero-area / degenerate face). Force-clip the
+            // current ear anyway so the face still fully triangulates. This is
+            // essential: makeTetrahedra's triFace_* helpers index edges[0..2] and
+            // assume every face is a triangle, so leaving a polygon here is a wild
+            // out-of-bounds read. The resulting zero-area triangle is unavoidable and
+            // is flagged by the positive-volume assertion in saveMesh.
+            //
+            // FIXME: reaching here means a degenerate (zero-area) BSP face slipped
+            // through -- forcing a zero-area triangle (and later a zero-volume
+            // tetrahedron) is INCORRECT and must be fixed at the source (the face
+            // should not be degenerate for a convex cell). Warn loudly.
+            fprintf(stderr,
+                "WARNING: triangulateFace(face %llu): degenerate (zero-area) face has no "
+                "positive-area triangulation; emitting a zero-area triangle. This is "
+                "INCORRECT and needs to be fixed.\n",
+                (unsigned long long)face_ind);
+            triangle_detach(face_ind);
+            num_face_edges--;
+            shifts_since_clip = 0;
         } else {
             UINT64_vect_down_shift(faces[face_ind].edges, 1);
-            // Safety net: a positive-area convex face always has a clippable ear, so
-            // one full rotation without a clip means a genuinely degenerate (zero-
-            // area) face. Stop rather than loop forever; the positive-volume assertion
-            // in saveMesh flags any degenerate tetrahedron this would leave.
-            if (++shifts_since_clip > num_face_edges) break;
         }
     }
 }
