@@ -107,8 +107,6 @@
 #endif
 #endif
 
-namespace vol_rem {
-
 inline void setFPUModeToRoundUP()
 {
     fesetround(FE_UPWARD);
@@ -159,6 +157,8 @@ inline int nfg_count_rz(uint32_t v)
     return z;
 }
 #endif
+
+namespace vol_rem {
 
 /////////////////////////////////////////////////////////////////////
 //
