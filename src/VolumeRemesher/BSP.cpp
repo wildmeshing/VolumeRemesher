@@ -1,6 +1,7 @@
 #include "BSP.h"
 #include <time.h>
 #include <algorithm>
+#include <cassert>
 #include <fstream>
 #include <iostream>
 #include <set>
@@ -2266,28 +2267,82 @@ bool BSPcomplex::aligned_face_edges(uint64_t fe0, uint64_t fe1, const BSPface& f
 //
 //  Input: the index of a BSPface: face_ind.
 // Output: nothing.
+// Exact test (no floating point): are the three 3D points collinear? Equivalent
+// to zero-area triangle -- true iff all three axis-aligned 2D projections have
+// zero orientation.
+static inline bool points_are_collinear(
+    const genericPoint& a, const genericPoint& b, const genericPoint& c)
+{
+    return genericPoint::orient2Dxy(a, b, c) == 0 && genericPoint::orient2Dyz(a, b, c) == 0 &&
+        genericPoint::orient2Dzx(a, b, c) == 0;
+}
+
 void BSPcomplex::triangulateFace(uint64_t face_ind)
 {
     // edges indices, of BSPface faces[face_ind], are listed in the vector
     // faces[face_ind].edges ordered as walking face-boundary clockwise
     // (or counterclockwise).
-    BSPface& face = faces[face_ind];
-    uint64_t num_face_edges = face.edges.size();
+    uint64_t num_face_edges = faces[face_ind].edges.size();
 
+    // Ear clipping. A convex face can carry "flat" vertices -- Steiner points that
+    // a BSP split dropped in the middle of a straight boundary -- so not every ear
+    // is a valid (positive-area) triangle. Clipping the wrong ear also strands a
+    // flat vertex into a degenerate remainder (e.g. a quad that is really a
+    // triangle with a Steiner point on one edge: one diagonal gives two good
+    // triangles, the other a good triangle plus a collinear one). So we only clip
+    // an ear whose triangle is non-degenerate AND, when the clip would leave the
+    // final triangle, whose remainder triangle is non-degenerate too; otherwise we
+    // rotate (shift) to try the next ear order. Both tests use the exact orient2D
+    // predicate (no floating point). Since a positive-area convex polygon always
+    // has such an ear, this terminates with only positive-area triangles.
+    uint64_t shifts_since_clip = 0;
     while (num_face_edges > 3) {
-        // Check if last two edges are not-aligned.
-        if (!aligned_face_edges(num_face_edges - 1, num_face_edges - 2, faces[face_ind])) {
-            // To remove the triangle with the vertices of the last two edges
-            // one must be sure that the remaining face does not become degenerate.
+        // Vertices of the candidate ear formed by the last two edges (apex t1 is
+        // their shared endpoint). Taken by value so triangle_detach's push_back
+        // into edges[] cannot dangle them.
+        const uint64_t el = faces[face_ind].edges[num_face_edges - 1];
+        const uint64_t ep = faces[face_ind].edges[num_face_edges - 2];
+        const uint32_t el0 = edges[el].vertices[0], el1 = edges[el].vertices[1];
+        const uint32_t ep0 = edges[ep].vertices[0], ep1 = edges[ep].vertices[1];
+        const uint32_t t1 = consecEdges_common_endpt(el0, el1, ep0, ep1);
+        const uint32_t t0 = other_edge_endpt(el0, el1, t1);
+        const uint32_t t2 = other_edge_endpt(ep0, ep1, t1);
 
-            if (!aligned_face_edges(0, num_face_edges - 3, faces[face_ind])) {
-                triangle_detach(face_ind);
-                num_face_edges--;
-            } else
-                UINT64_vect_down_shift(faces[face_ind].edges, 1);
+        // The ear (t0,t1,t2) must be a positive-area triangle. aligned_face_edges is
+        // a cheap integer pre-check for the common Steiner case (both edges sub-parts
+        // of the same original edge); points_are_collinear is the exact geometric
+        // test that also catches collinear ears from two DISTINCT original edges.
+        // aligned_face_edges(0, n-3) is the original guard that the remaining face
+        // must not become degenerate; keep it, then reinforce with the exact
+        // final-triangle test below.
+        bool clip_ok = !aligned_face_edges(num_face_edges - 1, num_face_edges - 2, faces[face_ind]) &&
+            !aligned_face_edges(0, num_face_edges - 3, faces[face_ind]) &&
+            !points_are_collinear(*vertices[t0], *vertices[t1], *vertices[t2]);
 
-        } else
+        // If this clip would reduce the face to its final triangle, that remaining
+        // triangle (t0, w, t2) -- w being the fourth vertex, i.e. the shared endpoint
+        // of the first two edges -- must also be non-degenerate.
+        if (clip_ok && num_face_edges == 4) {
+            const uint64_t f0 = faces[face_ind].edges[0];
+            const uint64_t f1 = faces[face_ind].edges[1];
+            const uint32_t w = consecEdges_common_endpt(
+                edges[f0].vertices[0], edges[f0].vertices[1], edges[f1].vertices[0],
+                edges[f1].vertices[1]);
+            if (points_are_collinear(*vertices[t0], *vertices[w], *vertices[t2])) clip_ok = false;
+        }
+
+        if (clip_ok) {
+            triangle_detach(face_ind);
+            num_face_edges--;
+            shifts_since_clip = 0;
+        } else {
             UINT64_vect_down_shift(faces[face_ind].edges, 1);
+            // Safety net: a positive-area convex face always has a clippable ear, so
+            // one full rotation without a clip means a genuinely degenerate (zero-
+            // area) face. Stop rather than loop forever; the positive-volume assertion
+            // in saveMesh flags any degenerate tetrahedron this would leave.
+            if (++shifts_since_clip > num_face_edges) break;
+        }
     }
 }
 
@@ -2306,7 +2361,6 @@ void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts)
             sum_y += cy;
             sum_z += cz;
             np++;
-            break; // This line should be commented to have an actual barycenter !!!!!!
         }
 
     vertices.push_back(new explicitPoint3D(sum_x / np, sum_y / np, sum_z / np));
@@ -2463,6 +2517,22 @@ void BSPcomplex::makeTetrahedra(bool verbose)
             }
         }
     }
+
+    // list_cellVertices / list_faceVertices do not fix a winding, so the tets come
+    // out with arbitrary orientation. Flip each negatively-oriented one (swap two
+    // vertices) so every tetrahedron has strictly positive volume. The sign is
+    // decided with the exact orient3D predicate (no floating point). A genuinely
+    // degenerate tet (orient3D == 0) cannot be fixed by a swap and is left as-is;
+    // the triangulation above is meant to prevent those, and the assertion in
+    // saveMesh will flag any that slip through rather than silently emitting them.
+    for (uint32_t t = 0; t < final_tets.size(); t += 4)
+        if (genericPoint::orient3D(
+                *vertices[final_tets[t]],
+                *vertices[final_tets[t + 1]],
+                *vertices[final_tets[t + 2]],
+                *vertices[final_tets[t + 3]]) < 0)
+            std::swap(final_tets[t + 2], final_tets[t + 3]);
+
     if (verbose) printf("Tetrahedra: %lu\n", final_tets.size() / 4);
 }
 
@@ -3002,6 +3072,21 @@ void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tet
     }
 
     f.close();
+
+#ifndef NDEBUG
+    // In tetrahedralization mode, every emitted tetrahedron must have strictly
+    // positive volume. makeTetrahedra() guarantees this (it drops zero-volume
+    // tets and orients the rest positively); assert it with the exact orient3D
+    // predicate -- no floating point -- so any regression is caught immediately.
+    if (tetrahedrize)
+        for (uint32_t t = 0; t < final_tets.size(); t += 4)
+            assert(genericPoint::orient3D(
+                       *vertices[final_tets[t]],
+                       *vertices[final_tets[t + 1]],
+                       *vertices[final_tets[t + 2]],
+                       *vertices[final_tets[t + 3]]) > 0 &&
+                   "saveMesh: generated tetrahedron does not have positive volume");
+#endif
 
     final_tets.clear();
 }
