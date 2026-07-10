@@ -2981,6 +2981,10 @@ void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tet
 
     if (!f) ip_error("\nBSPcomplex::[BSP.cpp]saveTetMesh: FATAL ERROR cannot open the file.\n");
 
+    // Full double precision: the default ostream precision (6 significant figures)
+    // collapses/inverts elements on fine or large-coordinate meshes.
+    f.precision(17);
+
     const uint64_t num_faces = faces.size();
 
     if (tetrahedrize)
