@@ -29,6 +29,7 @@ MODES = {
     "default":    ("",   "volume.msh"),
     "blackfaces": ("-b", "black_faces.off"),
     "skin":       ("-s", "skin.off"),
+    "tet":        ("-t", "volume.tet"),
 }
 
 
@@ -63,8 +64,9 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--binary", required=True, help="path to mesh_generator")
     ap.add_argument("--models", default="models", help="directory of .off models")
-    ap.add_argument("--mode", default="default", choices=sorted(MODES),
-                    help="output mode to hash (default: default -> volume.msh)")
+    ap.add_argument("--mode", default=["default"], nargs="+", choices=sorted(MODES),
+                    help="output mode(s) to hash (default: default). Multiple allowed, "
+                         "e.g. --mode default tet; the manifest groups all models by mode.")
     ap.add_argument("--timeout", type=float, default=120.0,
                     help="per-model timeout in seconds; slower models are skipped")
     ap.add_argument("--out", default=None,
@@ -83,17 +85,20 @@ def main():
 
     lines = []
     print(f"{'model':24s} {'mode':11s} {'sha256':64s}  note", file=sys.stderr)
-    for m in models:
-        path = os.path.join(args.models, m)
-        if not os.path.isfile(path):
-            print(f"{m:24s} {args.mode:11s} {'-':64s}  missing", file=sys.stderr)
-            continue
-        digest, note = run_one(args.binary, path, args.mode, args.timeout)
-        if digest is None:
-            print(f"{m:24s} {args.mode:11s} {'-':64s}  SKIP: {note}", file=sys.stderr)
-            continue
-        print(f"{m:24s} {args.mode:11s} {digest}  {note}", file=sys.stderr)
-        lines.append(f"{m}  {args.mode}  {digest}")
+    # Group by mode so each output block (default, tet, ...) stays contiguous and
+    # regenerating an existing manifest leaves the earlier blocks byte-identical.
+    for mode in args.mode:
+        for m in models:
+            path = os.path.join(args.models, m)
+            if not os.path.isfile(path):
+                print(f"{m:24s} {mode:11s} {'-':64s}  missing", file=sys.stderr)
+                continue
+            digest, note = run_one(args.binary, path, mode, args.timeout)
+            if digest is None:
+                print(f"{m:24s} {mode:11s} {'-':64s}  SKIP: {note}", file=sys.stderr)
+                continue
+            print(f"{m:24s} {mode:11s} {digest}  {note}", file=sys.stderr)
+            lines.append(f"{m}  {mode}  {digest}")
 
     header = (
         "# VolumeRemesher integration-test reference hashes.\n"
