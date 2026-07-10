@@ -57,8 +57,12 @@ void embed_tri_in_poly_mesh(
         std::vector<uint32_t> face_vrts(face.edges.size(), 0);
         complex->list_faceVertices(face, face_vrts);
         out_poly_vindexes.push_back((uint32_t)face_vrts.size());
-        for (uint32_t cvi : face_vrts) out_poly_vindexes.push_back(cvi);
-        if (face.colour == BLACK_A) facets_on_input.push_back((uint32_t)f_id);
+        for (uint32_t cvi : face_vrts) {
+            out_poly_vindexes.push_back(cvi);
+        }
+        if (face.colour == BLACK_A) {
+            facets_on_input.push_back((uint32_t)f_id);
+        }
     }
 
     if (verbose) printf("Producing cells...\n");
@@ -66,7 +70,9 @@ void embed_tri_in_poly_mesh(
     for (uint64_t c_id = 0; c_id < complex->cells.size(); c_id++) {
         BSPcell& cell = complex->cells[c_id];
         out_cell_findexes.push_back((uint32_t)cell.faces.size());
-        for (uint64_t cfi : cell.faces) out_cell_findexes.push_back((uint32_t)cfi);
+        for (uint64_t cfi : cell.faces) {
+            out_cell_findexes.push_back((uint32_t)cfi);
+        }
     }
 
     if (verbose) printf("Producing tets...\n");
@@ -74,7 +80,9 @@ void embed_tri_in_poly_mesh(
     assert(complex->final_tets.size() % 4 == 0);
     out_tets.resize(complex->final_tets.size() / 4);
     for (uint64_t t_id = 0; t_id < complex->final_tets.size(); t_id += 4) {
-        for (uint64_t i = 0; i < 4; ++i) out_tets[t_id / 4][i] = complex->final_tets[t_id + i];
+        for (uint64_t i = 0; i < 4; ++i) {
+            out_tets[t_id / 4][i] = complex->final_tets[t_id + i];
+        }
     }
 
     if (verbose) printf("Done\n");
