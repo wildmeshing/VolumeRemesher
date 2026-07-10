@@ -1182,11 +1182,13 @@ void BSPcomplex::facesPartition(
 
 #ifdef DEBUG_BSP
         if (vrtsOVER == 0 && vrtsUNDER == 0)
-            printf("\n[BSP.cpp]BSPcomplex::facesPartition: ERROR face have "
-                   "all vertices on the constraint plane.\n");
+            printf(
+                "\n[BSP.cpp]BSPcomplex::facesPartition: ERROR face have "
+                "all vertices on the constraint plane.\n");
         if (vrtsOVER > 0 && vrtsUNDER > 0)
-            printf("\n[BSP.cpp]BSPcomplex::facesPartition: ERROR face intersects "
-                   "the constraint plane.\n");
+            printf(
+                "\n[BSP.cpp]BSPcomplex::facesPartition: ERROR face intersects "
+                "the constraint plane.\n");
 #endif
 
         // IF one of the face vertices is OVER the constraint-plane (vrtsOVER>0),
@@ -1684,8 +1686,9 @@ uint32_t BSPcomplex::add_LPIvrt(const BSPedge& edge, uint32_t constr)
 #ifdef DEBUG_BSP
     if (!(e0->isExplicit3D()) || !(e1->isExplicit3D()) || !(c0->isExplicit3D()) ||
         !(c1->isExplicit3D()) || !(c2->isExplicit3D()))
-        printf("\n[BSP.cpp]BSPcomplex::add_LPIvrt: ERROR explicitPoint3D are "
-               "expected (LPI).\n");
+        printf(
+            "\n[BSP.cpp]BSPcomplex::add_LPIvrt: ERROR explicitPoint3D are "
+            "expected (LPI).\n");
 #endif
 
     vertices.push_back(new implicitPoint3D_LPI(
@@ -2377,7 +2380,7 @@ bool BSPcomplex::cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v)
 
 //
 //
-void BSPcomplex::makeTetrahedra()
+void BSPcomplex::makeTetrahedra(bool verbose)
 {
     uint64_t tet_num = 0; // total number of tetrahedra in which the cell will
                           // be decomposed.
@@ -2460,6 +2463,7 @@ void BSPcomplex::makeTetrahedra()
             }
         }
     }
+    if (verbose) printf("Tetrahedra: %lu\n", final_tets.size() / 4);
 }
 
 

@@ -38,7 +38,11 @@ void embed_tri_in_poly_mesh(
     std::vector<bigrational>& vertices,
     std::vector<uint32_t>& facets,
     std::vector<uint32_t>& cells,
+    std::vector<std::array<uint32_t, 4>>& out_tets,
+    std::vector<uint32_t>& final_tets_parent,
     std::vector<uint32_t>& facets_on_input,
+    std::vector<bool>& cells_with_faces_on_input,
+    std::vector<std::vector<uint32_t>>& final_tets_parent_faces,
     bool verbose);
 
 //
