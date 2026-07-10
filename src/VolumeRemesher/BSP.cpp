@@ -2267,99 +2267,189 @@ bool BSPcomplex::aligned_face_edges(uint64_t fe0, uint64_t fe1, const BSPface& f
 //
 //  Input: the index of a BSPface: face_ind.
 // Output: nothing.
-// Exact test (no floating point): are the three 3D points collinear? Equivalent
-// to zero-area triangle -- true iff all three axis-aligned 2D projections have
-// zero orientation.
-static inline bool points_are_collinear(
-    const genericPoint& a, const genericPoint& b, const genericPoint& c)
+// Do the unordered vertex triples {t[0],t[1],t[2]} and {x,y,z} describe the same
+// triangle? (All three of t's vertices must be one of x,y,z.)
+static inline bool
+same_triangle(const std::array<uint32_t, 3>& t, uint32_t x, uint32_t y, uint32_t z)
 {
-    return genericPoint::orient2Dxy(a, b, c) == 0 && genericPoint::orient2Dyz(a, b, c) == 0 &&
-        genericPoint::orient2Dzx(a, b, c) == 0;
+    return (t[0] == x || t[0] == y || t[0] == z) && (t[1] == x || t[1] == y || t[1] == z) &&
+        (t[2] == x || t[2] == y || t[2] == z);
+}
+
+// Triangulate the CONVEX polygon whose boundary vertices are `poly` (in boundary
+// order, global vertex indices) into positive-area triangles, returned as vertex-
+// index triples. `n_max` is the face's dominant normal component so genericPoint::
+// orient2D works in the face's plane.
+//
+// BSP faces are convex but can carry "flat" vertices -- Steiner points a split left
+// in the middle of a straight boundary edge -- so naive fan/ear-clipping produces
+// (or strands) zero-area triangles. This method is provably all-positive:
+//   1. Fan the strictly-convex "corners" (orient2D != 0). Three corners of a convex
+//      polygon are never collinear, so every fan triangle is positive.
+//   2. Insert each flat vertex f by splitting the one triangle whose *boundary* edge
+//      (u,v) contains f: (u,v,w) -> (u,f,w) + (f,v,w). w is off the line u-v, so both
+//      pieces are positive. f is a boundary vertex, so it lies on exactly one
+//      boundary edge (never strictly inside an interior diagonal), so the split is
+//      unambiguous.
+// Uses only orient2D (no in-circle / Delaunay). Developed and stress-tested in
+// tests/triangulation_playground.py.
+std::vector<std::array<uint32_t, 3>>
+BSPcomplex::triangulateConvexFace(const std::vector<uint32_t>& poly, int n_max)
+{
+    const uint32_t n = (uint32_t)poly.size();
+    std::vector<std::array<uint32_t, 3>> tris;
+
+    auto is_corner = [&](uint32_t i) {
+        return genericPoint::orient2D(
+                   *vertices[poly[(i + n - 1) % n]], *vertices[poly[i]],
+                   *vertices[poly[(i + 1) % n]], n_max) != 0;
+    };
+
+    // 1) Fan the strictly-convex corners.
+    std::vector<uint32_t> corners;
+    for (uint32_t i = 0; i < n; i++)
+        if (is_corner(i)) corners.push_back(i);
+    assert(corners.size() >= 3 &&
+           "triangulateConvexFace: degenerate (zero-area / non-convex) face");
+    for (size_t j = 1; j + 1 < corners.size(); j++)
+        tris.push_back({poly[corners[0]], poly[corners[j]], poly[corners[j + 1]]});
+
+    // 2) Insert each flat vertex by splitting the triangle whose boundary edge holds it.
+    for (uint32_t i = 0; i < n; i++) {
+        if (is_corner(i)) continue;
+        const uint32_t f = poly[i];
+        bool placed = false;
+        for (size_t ti = 0; ti < tris.size() && !placed; ti++) {
+            const std::array<uint32_t, 3> t = tris[ti];
+            for (int e = 0; e < 3 && !placed; e++) {
+                const uint32_t u = t[e], v = t[(e + 1) % 3], w = t[(e + 2) % 3];
+                if (genericPoint::orient2D(*vertices[u], *vertices[v], *vertices[f], n_max) != 0)
+                    continue; // f not on the line through edge (u,v)
+                // f (collinear with u,v) is strictly between them iff splitting
+                // (u,v,w) -> (u,f,w) + (f,v,w) keeps the parent orientation on both
+                // pieces (if f were outside [u,v] one piece would flip). This is the
+                // between-test and the positivity guarantee in one, orient2D only.
+                const int sp = genericPoint::orient2D(
+                    *vertices[u], *vertices[v], *vertices[w], n_max);
+                const int s1 = genericPoint::orient2D(
+                    *vertices[u], *vertices[f], *vertices[w], n_max);
+                const int s2 = genericPoint::orient2D(
+                    *vertices[f], *vertices[v], *vertices[w], n_max);
+                if (s1 != 0 && s2 != 0 && (s1 > 0) == (sp > 0) && (s2 > 0) == (sp > 0)) {
+                    tris[ti] = {u, f, w};
+                    tris.push_back({f, v, w});
+                    placed = true;
+                }
+            }
+        }
+        assert(placed && "triangulateConvexFace: flat vertex not on any boundary edge");
+    }
+    return tris;
 }
 
 void BSPcomplex::triangulateFace(uint64_t face_ind)
 {
-    // edges indices, of BSPface faces[face_ind], are listed in the vector
-    // faces[face_ind].edges ordered as walking face-boundary clockwise
-    // (or counterclockwise).
     uint64_t num_face_edges = faces[face_ind].edges.size();
+    if (num_face_edges <= 3) return;
 
-    // Ear clipping. A convex face can carry "flat" vertices -- Steiner points that
-    // a BSP split dropped in the middle of a straight boundary -- so not every ear
-    // is a valid (positive-area) triangle. Clipping the wrong ear also strands a
-    // flat vertex into a degenerate remainder (e.g. a quad that is really a
-    // triangle with a Steiner point on one edge: one diagonal gives two good
-    // triangles, the other a good triangle plus a collinear one). So we only clip
-    // an ear whose triangle is non-degenerate AND, when the clip would leave the
-    // final triangle, whose remainder triangle is non-degenerate too; otherwise we
-    // rotate (shift) to try the next ear order. Both tests use the exact orient2D
-    // predicate (no floating point). Since a positive-area convex polygon always
-    // has such an ear, this terminates with only positive-area triangles.
-    uint64_t shifts_since_clip = 0;
+    // Boundary vertices (in order) and the face's dominant projection plane.
+    std::vector<uint32_t> poly(num_face_edges, UINT32_MAX);
+    list_faceVertices(faces[face_ind], poly);
+    const int n_max = face_dominant_normal_component(faces[face_ind]);
+
+    // Robust, positive-area triangulation of the convex face.
+    std::vector<std::array<uint32_t, 3>> tris = triangulateConvexFace(poly, n_max);
+
+#ifndef NDEBUG
+    // Assert the triangulation is a valid, all-positive cover of the face: exactly
+    // n-2 triangles, every vertex used, and every triangle non-degenerate with the
+    // same orientation. Catches a non-convex/degenerate face or a triangulation bug
+    // right here rather than as a mysterious zero-volume tet downstream.
+    assert(tris.size() == (size_t)num_face_edges - 2 && "triangulateFace: wrong triangle count");
+    {
+        const int s0 = genericPoint::orient2D(
+            *vertices[tris[0][0]], *vertices[tris[0][1]], *vertices[tris[0][2]], n_max);
+        std::set<uint32_t> used;
+        for (const auto& t : tris) {
+            const int s =
+                genericPoint::orient2D(*vertices[t[0]], *vertices[t[1]], *vertices[t[2]], n_max);
+            assert(s != 0 && (s > 0) == (s0 > 0) &&
+                   "triangulateFace: degenerate or inconsistently-oriented triangle");
+            used.insert(t[0]);
+            used.insert(t[1]);
+            used.insert(t[2]);
+        }
+        assert(used.size() == (size_t)num_face_edges && "triangulateFace: not all vertices used");
+    }
+#endif
+
+    // ---- Realize `tris` on the BSP mesh via ear-clipping ------------------
+    //
+    // `tris` is the abstract triangulation (vertex-index triples); we now have to
+    // materialize it in the mesh data structure. The only primitive available for
+    // that is triangle_detach(face_ind), which "clips an ear": it takes the LAST
+    // TWO edges of face.edges -- edges[m-2] and edges[m-1], which share the corner
+    // vertex t1 and span the triangle <t0,t1,t2> -- removes that triangle from the
+    // face as a brand-new triangular BSPface, and closes the wound with a fresh
+    // diagonal edge t2-t0, shrinking this face by exactly one edge (m -> m-1) while
+    // fixing up all edge/face/cell connectivity. triangle_detach can therefore only
+    // ever cut the ear that currently sits in the last-two-edges slot.
+    //
+    // So we cannot pick which triangle to emit; we can only clip whatever ear the
+    // last two edges currently form, and rotate the edge list to change which ear
+    // that is. The loop is thus a match-or-rotate cycle:
+    //
+    //   * Read the current last-two-edges ear <t0,t1,t2>.
+    //   * If that ear is one of the triangles we still owe (same_triangle scan),
+    //     clip it: drop it from `tris` and call triangle_detach. The face loses an
+    //     edge; one fewer triangle remains.
+    //   * Otherwise rotate the edge list by one (down-shift) so a different pair of
+    //     edges becomes the last two, and try again.
+    //
+    // This terminates because our `tris` IS a valid triangulation of this convex
+    // polygon, and every polygon triangulation is an ear decomposition: at any
+    // stage the not-yet-clipped triangles tile the current sub-polygon, and such a
+    // tiling always contains at least two ears (triangles with two polygon-boundary
+    // edges). An ear of the sub-polygon is exactly a triangle whose two boundary
+    // edges are adjacent in face.edges, so at least one owed triangle can always be
+    // rotated into the last-two-edges slot -- we never get stuck, and after n-3
+    // clips the face is left as the final single triangle. guard_max bounds the
+    // rotations between clips (< one full turn per clip) purely as a debug backstop.
+    uint64_t guard = 0;
+    const uint64_t guard_max = 2 * num_face_edges * num_face_edges + 16;
     while (num_face_edges > 3) {
-        // Vertices of the candidate ear formed by the last two edges (apex t1 is
-        // their shared endpoint). Taken by value so triangle_detach's push_back
-        // into edges[] cannot dangle them.
         const uint64_t el = faces[face_ind].edges[num_face_edges - 1];
         const uint64_t ep = faces[face_ind].edges[num_face_edges - 2];
-        const uint32_t el0 = edges[el].vertices[0], el1 = edges[el].vertices[1];
-        const uint32_t ep0 = edges[ep].vertices[0], ep1 = edges[ep].vertices[1];
-        const uint32_t t1 = consecEdges_common_endpt(el0, el1, ep0, ep1);
-        const uint32_t t0 = other_edge_endpt(el0, el1, t1);
-        const uint32_t t2 = other_edge_endpt(ep0, ep1, t1);
+        const uint32_t t1 = consecEdges_common_endpt(
+            edges[el].vertices[0], edges[el].vertices[1], edges[ep].vertices[0],
+            edges[ep].vertices[1]);
+        const uint32_t t0 = other_edge_endpt(edges[el].vertices[0], edges[el].vertices[1], t1);
+        const uint32_t t2 = other_edge_endpt(edges[ep].vertices[0], edges[ep].vertices[1], t1);
 
-        // The ear (t0,t1,t2) must be a positive-area triangle. aligned_face_edges is
-        // a cheap integer pre-check for the common Steiner case (both edges sub-parts
-        // of the same original edge); points_are_collinear is the exact geometric
-        // test that also catches collinear ears from two DISTINCT original edges.
-        // aligned_face_edges(0, n-3) is the original guard that the remaining face
-        // must not become degenerate; keep it, then reinforce with the exact
-        // final-triangle test below.
-        bool clip_ok = !aligned_face_edges(num_face_edges - 1, num_face_edges - 2, faces[face_ind]) &&
-            !aligned_face_edges(0, num_face_edges - 3, faces[face_ind]) &&
-            !points_are_collinear(*vertices[t0], *vertices[t1], *vertices[t2]);
+        // Clip this ear iff it is one of our triangles; otherwise rotate to bring
+        // another ear into the last-two-edges position.
+        size_t match = tris.size();
+        for (size_t i = 0; i < tris.size(); i++)
+            if (same_triangle(tris[i], t0, t1, t2)) {
+                match = i;
+                break;
+            }
 
-        // If this clip would reduce the face to its final triangle, that remaining
-        // triangle (t0, w, t2) -- w being the fourth vertex, i.e. the shared endpoint
-        // of the first two edges -- must also be non-degenerate.
-        if (clip_ok && num_face_edges == 4) {
-            const uint64_t f0 = faces[face_ind].edges[0];
-            const uint64_t f1 = faces[face_ind].edges[1];
-            const uint32_t w = consecEdges_common_endpt(
-                edges[f0].vertices[0], edges[f0].vertices[1], edges[f1].vertices[0],
-                edges[f1].vertices[1]);
-            if (points_are_collinear(*vertices[t0], *vertices[w], *vertices[t2])) clip_ok = false;
-        }
-
-        if (clip_ok) {
+        if (match < tris.size()) {
+            tris[match] = tris.back();
+            tris.pop_back();
             triangle_detach(face_ind);
             num_face_edges--;
-            shifts_since_clip = 0;
-        } else if (++shifts_since_clip > num_face_edges) {
-            // One full rotation without a valid clip: the face has no positive-area
-            // triangulation (a genuinely zero-area / degenerate face). Force-clip the
-            // current ear anyway so the face still fully triangulates. This is
-            // essential: makeTetrahedra's triFace_* helpers index edges[0..2] and
-            // assume every face is a triangle, so leaving a polygon here is a wild
-            // out-of-bounds read. The resulting zero-area triangle is unavoidable and
-            // is flagged by the positive-volume assertion in saveMesh.
-            //
-            // FIXME: reaching here means a degenerate (zero-area) BSP face slipped
-            // through -- forcing a zero-area triangle (and later a zero-volume
-            // tetrahedron) is INCORRECT and must be fixed at the source (the face
-            // should not be degenerate for a convex cell). Warn loudly.
-            fprintf(stderr,
-                "WARNING: triangulateFace(face %llu): degenerate (zero-area) face has no "
-                "positive-area triangulation; emitting a zero-area triangle. This is "
-                "INCORRECT and needs to be fixed.\n",
-                (unsigned long long)face_ind);
-            triangle_detach(face_ind);
-            num_face_edges--;
-            shifts_since_clip = 0;
         } else {
             UINT64_vect_down_shift(faces[face_ind].edges, 1);
         }
+
+        if (++guard > guard_max) {
+            assert(false && "triangulateFace: ear-decomposition did not terminate");
+            break;
+        }
     }
+    assert(tris.size() == 1 && "triangulateFace: triangulation not fully realized");
 }
 
 //  Input: vertices indices of a BSPelement: vrts.
