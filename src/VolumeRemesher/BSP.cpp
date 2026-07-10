@@ -2938,9 +2938,14 @@ void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tet
         f << final_numver << " vertices\n";
         f << final_tets.size() / 4 << " tets\n";
 
-        // Print vertices coordinates
+        // Print vertices coordinates.
+        // Use operator<< (approximate double coordinates), NOT get_str(): get_str()
+        // serializes the exact rational in a base that depends on the bignum backend
+        // (decimal with gmpxx, binary without), so its bytes diverge across platforms
+        // -- e.g. MSVC (no gmpxx) vs Linux/macOS. operator<< prints portable doubles,
+        // matching the .msh path below and read_TET_file's %lf parsing.
         for (uint32_t v = 0; v < vertices.size(); v++)
-            if (vrts_visit[v]) f << (*vertices[v]).get_str() << "\n";
+            if (vrts_visit[v]) f << (*vertices[v]) << "\n";
 
         // Print tets
         for (uint32_t t = 0; t < final_tets.size(); t += 4)
