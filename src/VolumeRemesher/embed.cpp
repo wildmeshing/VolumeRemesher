@@ -31,11 +31,15 @@ void embed_tri_in_poly_mesh(
         verbose,
         true);
 
-    // // TODOfix: triangulateFace can cause degenerate triangles!!!
-    // for (size_t f_id = 0; f_id < complex->faces.size(); f_id++) {
-    //     complex->triangulateFace(f_id);
-    // }
-    // complex->makeTetrahedra(verbose);
+    // Triangulate every (convex) BSP face so the output facets are all triangles,
+    // then tetrahedralize the whole complex. keep_all_cells=true is essential
+    // here: this embedding keeps the entire background domain (both sides of the
+    // inserted surface), unlike the boolean path which only keeps region A.
+    // TODOfix: triangulateFace can cause degenerate triangles!!!
+    for (size_t f_id = 0; f_id < complex->faces.size(); f_id++) {
+        complex->triangulateFace(f_id);
+    }
+    complex->makeTetrahedra(verbose, /*keep_all_cells=*/true);
 
     if (verbose) printf("Producing vertices...\n");
     // Get exact vertex coordinates
@@ -82,6 +86,52 @@ void embed_tri_in_poly_mesh(
     for (uint64_t t_id = 0; t_id < complex->final_tets.size(); t_id += 4) {
         for (uint64_t i = 0; i < 4; ++i) {
             out_tets[t_id / 4][i] = complex->final_tets[t_id + i];
+        }
+    }
+
+    // Surface-tracking metadata, so the caller can carry the input-surface tags
+    // from the polygonal faces onto the output tets.
+
+    // Parent BSP cell of each output tet (recorded by makeTetrahedra).
+    final_tets_parent.assign(
+        complex->final_tets_parent_cell.begin(), complex->final_tets_parent_cell.end());
+
+    // Per-cell flag: does the cell touch the input surface? A face is on the
+    // input surface iff its colour is BLACK_A.
+    cells_with_faces_on_input.assign(complex->cells.size(), false);
+    for (uint64_t c_id = 0; c_id < complex->cells.size(); c_id++) {
+        for (uint64_t f_id : complex->cells[c_id].faces) {
+            if (complex->faces[f_id].colour == BLACK_A) {
+                cells_with_faces_on_input[c_id] = true;
+                break;
+            }
+        }
+    }
+
+    // For each output tet, which of its parent cell's (triangular) faces actually
+    // bound it: a triangle face is a face of the tet iff its three vertices are a
+    // subset of the tet's four vertices (a tetrahedron's four faces are exactly
+    // the four vertex-triples of its vertices). Faces introduced internally by
+    // the decomposition (barycenter / cone apex) are not BSP faces and are thus
+    // correctly excluded. Only computed for cells that touch the input surface;
+    // for the rest the caller leaves every tet face untagged anyway.
+    final_tets_parent_faces.assign(out_tets.size(), {});
+    for (uint64_t t_id = 0; t_id < out_tets.size(); t_id++) {
+        const uint32_t c_id = final_tets_parent[t_id];
+        if (!cells_with_faces_on_input[c_id]) continue;
+        const std::array<uint32_t, 4>& tet = out_tets[t_id];
+        for (uint64_t f_id : complex->cells[c_id].faces) {
+            std::vector<uint32_t> fv(complex->faces[f_id].edges.size(), 0);
+            complex->list_faceVertices(complex->faces[f_id], fv);
+            if (fv.size() != 3) continue; // only triangles bound a tet face
+            bool subset = true;
+            for (uint32_t w : fv) {
+                if (w != tet[0] && w != tet[1] && w != tet[2] && w != tet[3]) {
+                    subset = false;
+                    break;
+                }
+            }
+            if (subset) final_tets_parent_faces[t_id].push_back((uint32_t)f_id);
         }
     }
 

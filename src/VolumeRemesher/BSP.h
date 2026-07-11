@@ -206,6 +206,11 @@ public:
     std::vector<uint32_t> final_tets; // Simple vector storing the tetrahedra
     // (only used when saving a tet-mesh)
 
+    // Parent BSP cell index for each tet in final_tets (entry k corresponds to
+    // final_tets[4*k .. 4*k+3]). Filled by makeTetrahedra so the surface-embedding
+    // path can map every output tet back to the cell it was carved from.
+    std::vector<uint32_t> final_tets_parent_cell;
+
 
     // Supporting vectors
     std::vector<char> vrts_orBin; // Used to "cache" vertex orientations
@@ -393,7 +398,10 @@ public:
     inline uint64_t triFace_oppEdge(const BSPface& face, uint32_t v);
     uint64_t triFace_shareEdge(const BSPcell& cell, uint64_t face_ind, uint64_t vOppEdge_ind);
     bool cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v);
-    void makeTetrahedra(bool verbose = false);
+    // keep_all_cells=true tetrahedralizes EVERY cell, ignoring the INTERNAL_A
+    // boolean classification. The surface-embedding path uses this because it
+    // keeps the whole background domain instead of one boolean region.
+    void makeTetrahedra(bool verbose = false, bool keep_all_cells = false);
 };
 
 /// <summary>
