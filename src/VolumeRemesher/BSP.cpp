@@ -2626,7 +2626,7 @@ bool BSPcomplex::cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v)
 
 //
 //
-void BSPcomplex::makeTetrahedra(bool verbose)
+void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
 {
     uint64_t tet_num = 0; // total number of tetrahedra in which the cell will
                           // be decomposed.
@@ -2645,7 +2645,7 @@ void BSPcomplex::makeTetrahedra(bool verbose)
 
     for (uint64_t cell_i = 0; cell_i < cells.size(); cell_i++) {
         BSPcell& cell = cells[cell_i];
-        if (cell.place != INTERNAL_A) continue;
+        if (!keep_all_cells && cell.place != INTERNAL_A) continue;
 
         // If cell has more than 4 faces -> chose between types 1 and 2
         if (cell.faces.size() > 4) {
@@ -2677,15 +2677,18 @@ void BSPcomplex::makeTetrahedra(bool verbose)
     }
 
     final_tets.reserve(tet_num * 4);
+    final_tets_parent_cell.clear();
+    final_tets_parent_cell.reserve(tet_num);
 
     // Make tets
     for (uint64_t cell_i = 0; cell_i < cells.size(); cell_i++) {
         BSPcell& cell = cells[cell_i];
-        if (cell.place != INTERNAL_A) continue;
+        if (!keep_all_cells && cell.place != INTERNAL_A) continue;
         if (decomposition_type[cell_i] == 0) { // Simple tet
             vector<uint32_t> cell_vrts(4, UINT32_MAX);
             list_cellVertices(cells[cell_i], 6, cell_vrts);
             final_tets.insert(final_tets.end(), cell_vrts.begin(), cell_vrts.end());
+            final_tets_parent_cell.push_back((uint32_t)cell_i);
         } else if (decomposition_type[cell_i] == 1) { // Tetrahedralizable from vertex
             uint32_t v = decomposition_vrt[cell_i];
             uint64_t num_incFaces = count_cellFaces_inc_cellVrt(cells[cell_i], v);
@@ -2698,6 +2701,7 @@ void BSPcomplex::makeTetrahedra(bool verbose)
                 list_faceVertices(faces[face_i], face_vrts);
                 final_tets.insert(final_tets.end(), face_vrts.begin(), face_vrts.end());
                 final_tets.push_back(v);
+                final_tets_parent_cell.push_back((uint32_t)cell_i);
             }
         } else { // Uses cell barycenter
             for (uint64_t face_i : cells[cell_i].faces) {
@@ -2706,6 +2710,7 @@ void BSPcomplex::makeTetrahedra(bool verbose)
                 list_faceVertices(faces[face_i], face_vrts);
                 final_tets.insert(final_tets.end(), face_vrts.begin(), face_vrts.end());
                 final_tets.push_back(decomposition_vrt[cell_i]);
+                final_tets_parent_cell.push_back((uint32_t)cell_i);
             }
         }
     }
