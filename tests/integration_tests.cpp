@@ -53,12 +53,14 @@ std::vector<Entry> load_manifest() {
 std::string flags_for(const std::string& mode) {
     if (mode == "blackfaces") return "-b";
     if (mode == "skin") return "-s";
+    if (mode == "tet") return "-t";
     return ""; // default -> volume.msh
 }
 
 std::string output_for(const std::string& mode) {
     if (mode == "blackfaces") return "black_faces.off";
     if (mode == "skin") return "skin.off";
+    if (mode == "tet") return "volume.tet";
     return "volume.msh";
 }
 

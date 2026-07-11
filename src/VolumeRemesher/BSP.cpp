@@ -1,6 +1,7 @@
 #include "BSP.h"
 #include <time.h>
 #include <algorithm>
+#include <cassert>
 #include <fstream>
 #include <iostream>
 #include <set>
@@ -2266,36 +2267,236 @@ bool BSPcomplex::aligned_face_edges(uint64_t fe0, uint64_t fe1, const BSPface& f
 //
 //  Input: the index of a BSPface: face_ind.
 // Output: nothing.
-void BSPcomplex::triangulateFace(uint64_t face_ind)
+// Do the unordered vertex triples {t[0],t[1],t[2]} and {x,y,z} describe the same
+// triangle? (All three of t's vertices must be one of x,y,z.)
+static inline bool
+same_triangle(const std::array<uint32_t, 3>& t, uint32_t x, uint32_t y, uint32_t z)
 {
-    // edges indices, of BSPface faces[face_ind], are listed in the vector
-    // faces[face_ind].edges ordered as walking face-boundary clockwise
-    // (or counterclockwise).
-    BSPface& face = faces[face_ind];
-    uint64_t num_face_edges = face.edges.size();
-
-    while (num_face_edges > 3) {
-        // Check if last two edges are not-aligned.
-        if (!aligned_face_edges(num_face_edges - 1, num_face_edges - 2, faces[face_ind])) {
-            // To remove the triangle with the vertices of the last two edges
-            // one must be sure that the remaining face does not become degenerate.
-
-            if (!aligned_face_edges(0, num_face_edges - 3, faces[face_ind])) {
-                triangle_detach(face_ind);
-                num_face_edges--;
-            } else
-                UINT64_vect_down_shift(faces[face_ind].edges, 1);
-
-        } else
-            UINT64_vect_down_shift(faces[face_ind].edges, 1);
-    }
+    return (t[0] == x || t[0] == y || t[0] == z) && (t[1] == x || t[1] == y || t[1] == z) &&
+        (t[2] == x || t[2] == y || t[2] == z);
 }
 
-//  Input: vertices indices of a BSPelement: vrts.
-// Output: nothing.
-// Note. a point representing the baricenter (or its approximation) is created
-//       and added to the vector vertices.
-void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts)
+// Triangulate the CONVEX polygon whose boundary vertices are `poly` (in boundary
+// order, global vertex indices) into positive-area triangles, returned as vertex-
+// index triples. `is_flat[i]` marks poly[i] as a "flat" vertex -- a Steiner point
+// a split left in the middle of a straight boundary edge (as opposed to a "corner",
+// where the boundary actually turns); the caller classifies these cheaply (see
+// triangulateFace).
+//
+// BSP faces are convex but carry these flat vertices, so a naive fan/ear-clipping
+// produces (or strands) zero-area triangles. This method is provably all-positive
+// and, crucially, needs NO geometric predicate of its own -- it is pure integer
+// bookkeeping:
+//   1. Fan the corners from corners[0]: triangles (corners[0], corners[j],
+//      corners[j+1]). Three corners of a convex polygon are never collinear, so
+//      every fan triangle is positive.
+//   2. Insert the flats. The flats between two consecutive corners c_a, c_b form a
+//      straight boundary chain that is an edge of exactly one fan triangle. Walk
+//      that run in boundary order; each flat f splits the triangle currently
+//      carrying the edge (near, c_b) -- found by integer vertex membership -- as
+//      (A,B,W) -> (A,f,W) + (f,B,W), where W is that triangle's apex (necessarily
+//      off the chain's line, since the triangle is non-degenerate) and f lies
+//      strictly between near and c_b on the line, so both pieces are positive.
+//      `near` then advances to f. Reading W from the found triangle keeps this
+//      correct even where two chains meet the same fan triangle (at corners[1] and
+//      corners[m-1]): whichever chain splits first, the other simply finds the new,
+//      smaller triangle carrying its edge.
+// Developed and stress-tested in tests/triangulation_playground.py.
+std::vector<std::array<uint32_t, 3>>
+BSPcomplex::triangulateConvexFace(
+    const std::vector<uint32_t>& poly, const std::vector<char>& is_flat)
+{
+    const uint32_t n = (uint32_t)poly.size();
+    std::vector<std::array<uint32_t, 3>> tris;
+    tris.reserve(n - 2);
+
+    // Corner indices, in boundary order.
+    tri_corner_list.clear();
+    for (uint32_t i = 0; i < n; i++)
+        if (!is_flat[i]) tri_corner_list.push_back(i);
+    const size_t m = tri_corner_list.size();
+    assert(m >= 3 && "triangulateConvexFace: fewer than 3 corners (degenerate face)");
+
+    // 1) Fan the corners.
+    for (size_t j = 1; j + 1 < m; j++)
+        tris.push_back({poly[tri_corner_list[0]], poly[tri_corner_list[j]],
+                        poly[tri_corner_list[j + 1]]});
+
+    // 2) Insert the flats, run by run (chain between two consecutive corners).
+    for (size_t k = 0; k < m; k++) {
+        const uint32_t ca = tri_corner_list[k];
+        const uint32_t cb = tri_corner_list[(k + 1) % m];
+        if ((ca + 1) % n == cb) continue; // corners adjacent -> no flats on this chain
+        const uint32_t cb_v = poly[cb];
+        uint32_t near_v = poly[ca];
+        for (uint32_t i = (ca + 1) % n; i != cb; i = (i + 1) % n) {
+            const uint32_t f = poly[i];
+            // Find the current triangle carrying edge (near_v, cb_v) by integer match.
+            size_t ti = tris.size();
+            int p = -1;
+            for (size_t t = 0; t < tris.size() && p < 0; t++)
+                for (int e = 0; e < 3; e++) {
+                    const uint32_t a = tris[t][e], b = tris[t][(e + 1) % 3];
+                    if ((a == near_v && b == cb_v) || (a == cb_v && b == near_v)) {
+                        ti = t;
+                        p = e;
+                        break;
+                    }
+                }
+            assert(p >= 0 && "triangulateConvexFace: flat-run edge not found");
+            const uint32_t A = tris[ti][p];           // near_v or cb_v
+            const uint32_t B = tris[ti][(p + 1) % 3]; // the other of the pair
+            const uint32_t W = tris[ti][(p + 2) % 3]; // apex, off the chain line
+            // Split edge A->B at f, preserving winding: (A,f,W) + (f,B,W).
+            tris[ti] = {A, f, W};
+            tris.push_back({f, B, W});
+            near_v = f;
+        }
+    }
+    return tris;
+}
+
+void BSPcomplex::triangulateFace(uint64_t face_ind)
+{
+    uint64_t num_face_edges = faces[face_ind].edges.size();
+    if (num_face_edges <= 3) return;
+    const uint32_t n = (uint32_t)num_face_edges;
+
+    // Boundary vertices (in order) and the face's dominant projection plane.
+    std::vector<uint32_t> poly(num_face_edges, UINT32_MAX);
+    list_faceVertices(faces[face_ind], poly);
+    const int n_max = face_dominant_normal_component(faces[face_ind]);
+
+    // Classify each boundary vertex corner/flat. poly[i] is the shared endpoint of
+    // the boundary edges at positions (i-1) and i, so it is a flat (a Steiner point
+    // on a straight edge) when those two edges are aligned -- sub-edges of the same
+    // original edge, which is how every Steiner point arises. aligned_face_edges is a
+    // pure integer meshVertices comparison, so the common flats cost no predicate. We
+    // only fall back to the exact orient2D when the edges are NOT aligned; that test
+    // is non-degenerate (hence cheap) for a genuine corner and pays the expensive
+    // exact path only for the rare collinear-but-not-aligned vertex. This is what
+    // keeps triangulation off orient2D's exact-arithmetic fallback (its dominant cost).
+    tri_is_flat.assign(n, 0);
+    for (uint32_t i = 0; i < n; i++)
+        if (aligned_face_edges((i + n - 1) % n, i, faces[face_ind]) ||
+            genericPoint::orient2D(
+                *vertices[poly[(i + n - 1) % n]], *vertices[poly[i]],
+                *vertices[poly[(i + 1) % n]], n_max) == 0)
+            tri_is_flat[i] = 1;
+
+    // Robust, positive-area triangulation of the convex face (pure integer work).
+    std::vector<std::array<uint32_t, 3>> tris = triangulateConvexFace(poly, tri_is_flat);
+
+#ifndef NDEBUG
+    // Assert the triangulation is a valid, all-positive cover of the face: exactly
+    // n-2 triangles, every vertex used, and every triangle non-degenerate with the
+    // same orientation. Catches a non-convex/degenerate face or a triangulation bug
+    // right here rather than as a mysterious zero-volume tet downstream.
+    assert(tris.size() == (size_t)num_face_edges - 2 && "triangulateFace: wrong triangle count");
+    {
+        const int s0 = genericPoint::orient2D(
+            *vertices[tris[0][0]], *vertices[tris[0][1]], *vertices[tris[0][2]], n_max);
+        std::set<uint32_t> used;
+        for (const auto& t : tris) {
+            const int s =
+                genericPoint::orient2D(*vertices[t[0]], *vertices[t[1]], *vertices[t[2]], n_max);
+            assert(s != 0 && (s > 0) == (s0 > 0) &&
+                   "triangulateFace: degenerate or inconsistently-oriented triangle");
+            used.insert(t[0]);
+            used.insert(t[1]);
+            used.insert(t[2]);
+        }
+        assert(used.size() == (size_t)num_face_edges && "triangulateFace: not all vertices used");
+    }
+#endif
+
+    // ---- Realize `tris` on the BSP mesh via ear-clipping ------------------
+    //
+    // `tris` is the abstract triangulation (vertex-index triples); we now have to
+    // materialize it in the mesh data structure. The only primitive available for
+    // that is triangle_detach(face_ind), which "clips an ear": it takes the LAST
+    // TWO edges of face.edges -- edges[m-2] and edges[m-1], which share the corner
+    // vertex t1 and span the triangle <t0,t1,t2> -- removes that triangle from the
+    // face as a brand-new triangular BSPface, and closes the wound with a fresh
+    // diagonal edge t2-t0, shrinking this face by exactly one edge (m -> m-1) while
+    // fixing up all edge/face/cell connectivity. triangle_detach can therefore only
+    // ever cut the ear that currently sits in the last-two-edges slot.
+    //
+    // So we cannot pick which triangle to emit; we can only clip whatever ear the
+    // last two edges currently form, and rotate the edge list to change which ear
+    // that is. The loop is thus a match-or-rotate cycle:
+    //
+    //   * Read the current last-two-edges ear <t0,t1,t2>.
+    //   * If that ear is one of the triangles we still owe (same_triangle scan),
+    //     clip it: drop it from `tris` and call triangle_detach. The face loses an
+    //     edge; one fewer triangle remains.
+    //   * Otherwise rotate the edge list by one (down-shift) so a different pair of
+    //     edges becomes the last two, and try again.
+    //
+    // This terminates because our `tris` IS a valid triangulation of this convex
+    // polygon, and every polygon triangulation is an ear decomposition: at any
+    // stage the not-yet-clipped triangles tile the current sub-polygon, and such a
+    // tiling always contains at least two ears (triangles with two polygon-boundary
+    // edges). An ear of the sub-polygon is exactly a triangle whose two boundary
+    // edges are adjacent in face.edges, so at least one owed triangle can always be
+    // rotated into the last-two-edges slot -- we never get stuck, and after n-3
+    // clips the face is left as the final single triangle. guard_max bounds the
+    // rotations between clips (< one full turn per clip) purely as a debug backstop.
+    uint64_t guard = 0;
+    const uint64_t guard_max = 2 * num_face_edges * num_face_edges + 16;
+    while (num_face_edges > 3) {
+        const uint64_t el = faces[face_ind].edges[num_face_edges - 1];
+        const uint64_t ep = faces[face_ind].edges[num_face_edges - 2];
+        const uint32_t t1 = consecEdges_common_endpt(
+            edges[el].vertices[0], edges[el].vertices[1], edges[ep].vertices[0],
+            edges[ep].vertices[1]);
+        const uint32_t t0 = other_edge_endpt(edges[el].vertices[0], edges[el].vertices[1], t1);
+        const uint32_t t2 = other_edge_endpt(edges[ep].vertices[0], edges[ep].vertices[1], t1);
+
+        // Clip this ear iff it is one of our triangles; otherwise rotate to bring
+        // another ear into the last-two-edges position.
+        size_t match = tris.size();
+        for (size_t i = 0; i < tris.size(); i++)
+            if (same_triangle(tris[i], t0, t1, t2)) {
+                match = i;
+                break;
+            }
+
+        if (match < tris.size()) {
+            tris[match] = tris.back();
+            tris.pop_back();
+            triangle_detach(face_ind);
+            num_face_edges--;
+        } else {
+            UINT64_vect_down_shift(faces[face_ind].edges, 1);
+        }
+
+        if (++guard > guard_max) {
+            assert(false && "triangulateFace: ear-decomposition did not terminate");
+            break;
+        }
+    }
+    assert(tris.size() == 1 && "triangulateFace: triangulation not fully realized");
+}
+
+// Append to `vertices` a point strictly interior to `cell` (its faces are already
+// triangulated), to be used as the apex that fans the cell into tetrahedra.
+//
+// Fast path: the double average of the cell vertices. For a convex cell the exact
+// vertex centroid is strictly interior, but its DOUBLE approximation can round
+// exactly onto a face plane (e.g. a shallow "pyramid" cell whose apex is barely off
+// an oblique base) -- then the fan tet on that face is degenerate (orient3D == 0) and
+// cannot be repaired by the winding-flip below. So we check every fan tet with the
+// exact orient3D predicate; if none is degenerate, keep the cheap explicit (double)
+// point. (A merely wrong-signed tet is not a problem -- the flip fixes it.)
+//
+// Otherwise fall back to an EXACT barycenter: implicitPoint3D_TBC of four
+// non-coplanar cell vertices. The centroid of four non-coplanar points lies in the
+// open interior of their tetrahedron, which is contained in the open interior of the
+// convex cell, so it is strictly interior to every face; and because TBC is an
+// implicit (rational) point, orient3D evaluates it exactly, never rounding onto a
+// plane.
+void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& cell)
 {
     double cx, cy, cz;
     double sum_x = 0.0, sum_y = 0.0, sum_z = 0.0;
@@ -2306,10 +2507,55 @@ void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts)
             sum_y += cy;
             sum_z += cz;
             np++;
-            break; // This line should be commented to have an actual barycenter !!!!!!
         }
+    explicitPoint3D* cand = new explicitPoint3D(sum_x / np, sum_y / np, sum_z / np);
 
-    vertices.push_back(new explicitPoint3D(sum_x / np, sum_y / np, sum_z / np));
+    // Verify no fan tet (face, candidate) is degenerate.
+    bool ok = true;
+    for (uint64_t fi : cell.faces) {
+        vector<uint32_t> fv(3, UINT32_MAX);
+        list_faceVertices(faces[fi], fv);
+        if (genericPoint::orient3D(*vertices[fv[0]], *vertices[fv[1]], *vertices[fv[2]], *cand) ==
+            0) {
+            ok = false;
+            break;
+        }
+    }
+    if (ok) {
+        vertices.push_back(cand);
+        vrts_visit.push_back(0);
+        return;
+    }
+    delete cand;
+
+    // Exact fallback: barycenter of four affinely-independent (non-coplanar) cell
+    // vertices. Build the quadruple greedily -- add a vertex only if it is
+    // independent of the ones already chosen: the 2nd must be distinct (all cell
+    // vertices are), the 3rd not collinear with the first two, the 4th not coplanar
+    // with the first three. A non-degenerate (positive-volume) cell always has such
+    // a quadruple. quad[] never holds an out-of-range index, so the predicates below
+    // only ever see already-selected points.
+    const uint32_t n = (uint32_t)vrts.size();
+    uint32_t quad[4];
+    uint32_t nq = 0;
+    for (uint32_t i = 0; i < n && nq < 4; i++) {
+        const genericPoint& t = *vertices[vrts[i]];
+        bool independent;
+        if (nq < 2)
+            independent = true; // 1st vertex, and any distinct 2nd vertex
+        else if (nq == 2)
+            independent = genericPoint::orient2Dxy(*vertices[quad[0]], *vertices[quad[1]], t) != 0 ||
+                genericPoint::orient2Dyz(*vertices[quad[0]], *vertices[quad[1]], t) != 0 ||
+                genericPoint::orient2Dzx(*vertices[quad[0]], *vertices[quad[1]], t) != 0;
+        else // nq == 3
+            independent = genericPoint::orient3D(
+                              *vertices[quad[0]], *vertices[quad[1]], *vertices[quad[2]], t) != 0;
+        if (independent) quad[nq++] = vrts[i];
+    }
+    assert(nq == 4 && "computeBaricenter: cell has no 4 non-coplanar vertices (flat cell)");
+
+    vertices.push_back(new implicitPoint3D_TBC(
+        *vertices[quad[0]], *vertices[quad[1]], *vertices[quad[2]], *vertices[quad[3]]));
     vrts_visit.push_back(0);
 }
 
@@ -2421,7 +2667,7 @@ void BSPcomplex::makeTetrahedra(bool verbose)
 
             if (needs_barycenter) { // Cell need baricenter
                 decomposition_type[cell_i] = 2;
-                computeBaricenter(cell_vrts);
+                computeBaricenter(cell_vrts, cell);
                 decomposition_vrt[cell_i] = ((uint32_t)vertices.size() - 1);
                 tet_num += cell.faces.size();
             }
@@ -2463,6 +2709,22 @@ void BSPcomplex::makeTetrahedra(bool verbose)
             }
         }
     }
+
+    // list_cellVertices / list_faceVertices do not fix a winding, so the tets come
+    // out with arbitrary orientation. Flip each negatively-oriented one (swap two
+    // vertices) so every tetrahedron has strictly positive volume. The sign is
+    // decided with the exact orient3D predicate (no floating point). A genuinely
+    // degenerate tet (orient3D == 0) cannot be fixed by a swap and is left as-is;
+    // the triangulation above is meant to prevent those, and the assertion in
+    // saveMesh will flag any that slip through rather than silently emitting them.
+    for (uint32_t t = 0; t < final_tets.size(); t += 4)
+        if (genericPoint::orient3D(
+                *vertices[final_tets[t]],
+                *vertices[final_tets[t + 1]],
+                *vertices[final_tets[t + 2]],
+                *vertices[final_tets[t + 3]]) < 0)
+            std::swap(final_tets[t + 2], final_tets[t + 3]);
+
     if (verbose) printf("Tetrahedra: %lu\n", final_tets.size() / 4);
 }
 
@@ -2895,6 +3157,10 @@ void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tet
 
     if (!f) ip_error("\nBSPcomplex::[BSP.cpp]saveTetMesh: FATAL ERROR cannot open the file.\n");
 
+    // Full double precision: the default ostream precision (6 significant figures)
+    // collapses/inverts elements on fine or large-coordinate meshes.
+    f.precision(17);
+
     const uint64_t num_faces = faces.size();
 
     if (tetrahedrize)
@@ -2938,9 +3204,14 @@ void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tet
         f << final_numver << " vertices\n";
         f << final_tets.size() / 4 << " tets\n";
 
-        // Print vertices coordinates
+        // Print vertices coordinates.
+        // Use operator<< (approximate double coordinates), NOT get_str(): get_str()
+        // serializes the exact rational in a base that depends on the bignum backend
+        // (decimal with gmpxx, binary without), so its bytes diverge across platforms
+        // -- e.g. MSVC (no gmpxx) vs Linux/macOS. operator<< prints portable doubles,
+        // matching the .msh path below and read_TET_file's %lf parsing.
         for (uint32_t v = 0; v < vertices.size(); v++)
-            if (vrts_visit[v]) f << (*vertices[v]).get_str() << "\n";
+            if (vrts_visit[v]) f << (*vertices[v]) << "\n";
 
         // Print tets
         for (uint32_t t = 0; t < final_tets.size(); t += 4)
@@ -2997,6 +3268,21 @@ void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tet
     }
 
     f.close();
+
+#ifndef NDEBUG
+    // In tetrahedralization mode, every emitted tetrahedron must have strictly
+    // positive volume. makeTetrahedra() guarantees this (it drops zero-volume
+    // tets and orients the rest positively); assert it with the exact orient3D
+    // predicate -- no floating point -- so any regression is caught immediately.
+    if (tetrahedrize)
+        for (uint32_t t = 0; t < final_tets.size(); t += 4)
+            assert(genericPoint::orient3D(
+                       *vertices[final_tets[t]],
+                       *vertices[final_tets[t + 1]],
+                       *vertices[final_tets[t + 2]],
+                       *vertices[final_tets[t + 3]]) > 0 &&
+                   "saveMesh: generated tetrahedron does not have positive volume");
+#endif
 
     final_tets.clear();
 }

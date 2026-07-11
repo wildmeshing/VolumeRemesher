@@ -4,6 +4,7 @@
 #include <VolumeRemesher/implicit_point.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <array>
 #include <list>
 #include <utility>
 #include <vector>
@@ -215,6 +216,11 @@ public:
     std::vector<uint64_t> edge_visit; // To flag visited edges when needed
     // (same length of edges)
 
+    // Reused scratch buffers for face triangulation (a hot single-threaded loop;
+    // reusing these avoids a per-face heap allocation).
+    std::vector<char> tri_is_flat; // per boundary-vertex: is it a flat (Steiner) point?
+    std::vector<uint32_t> tri_corner_list; // indices (into poly) of the corners
+
     BSPcomplex(
         const TetMesh* mesh,
         const constraints_t* constraints,
@@ -380,8 +386,10 @@ public:
     // Tetrahedralization
     void triangle_detach(uint64_t face_ind);
     bool aligned_face_edges(uint64_t fe0, uint64_t fe1, const BSPface& face);
+    std::vector<std::array<uint32_t, 3>>
+    triangulateConvexFace(const std::vector<uint32_t>& poly, const std::vector<char>& is_flat);
     void triangulateFace(uint64_t face_ind);
-    void computeBaricenter(const vector<uint32_t>& vrts);
+    void computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& cell);
     inline uint64_t triFace_oppEdge(const BSPface& face, uint32_t v);
     uint64_t triFace_shareEdge(const BSPcell& cell, uint64_t face_ind, uint64_t vOppEdge_ind);
     bool cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v);
