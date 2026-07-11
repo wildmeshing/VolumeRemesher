@@ -2278,71 +2278,80 @@ same_triangle(const std::array<uint32_t, 3>& t, uint32_t x, uint32_t y, uint32_t
 
 // Triangulate the CONVEX polygon whose boundary vertices are `poly` (in boundary
 // order, global vertex indices) into positive-area triangles, returned as vertex-
-// index triples. `n_max` is the face's dominant normal component so genericPoint::
-// orient2D works in the face's plane.
+// index triples. `is_flat[i]` marks poly[i] as a "flat" vertex -- a Steiner point
+// a split left in the middle of a straight boundary edge (as opposed to a "corner",
+// where the boundary actually turns); the caller classifies these cheaply (see
+// triangulateFace).
 //
-// BSP faces are convex but can carry "flat" vertices -- Steiner points a split left
-// in the middle of a straight boundary edge -- so naive fan/ear-clipping produces
-// (or strands) zero-area triangles. This method is provably all-positive:
-//   1. Fan the strictly-convex "corners" (orient2D != 0). Three corners of a convex
-//      polygon are never collinear, so every fan triangle is positive.
-//   2. Insert each flat vertex f by splitting the one triangle whose *boundary* edge
-//      (u,v) contains f: (u,v,w) -> (u,f,w) + (f,v,w). w is off the line u-v, so both
-//      pieces are positive. f is a boundary vertex, so it lies on exactly one
-//      boundary edge (never strictly inside an interior diagonal), so the split is
-//      unambiguous.
-// Uses only orient2D (no in-circle / Delaunay). Developed and stress-tested in
-// tests/triangulation_playground.py.
+// BSP faces are convex but carry these flat vertices, so a naive fan/ear-clipping
+// produces (or strands) zero-area triangles. This method is provably all-positive
+// and, crucially, needs NO geometric predicate of its own -- it is pure integer
+// bookkeeping:
+//   1. Fan the corners from corners[0]: triangles (corners[0], corners[j],
+//      corners[j+1]). Three corners of a convex polygon are never collinear, so
+//      every fan triangle is positive.
+//   2. Insert the flats. The flats between two consecutive corners c_a, c_b form a
+//      straight boundary chain that is an edge of exactly one fan triangle. Walk
+//      that run in boundary order; each flat f splits the triangle currently
+//      carrying the edge (near, c_b) -- found by integer vertex membership -- as
+//      (A,B,W) -> (A,f,W) + (f,B,W), where W is that triangle's apex (necessarily
+//      off the chain's line, since the triangle is non-degenerate) and f lies
+//      strictly between near and c_b on the line, so both pieces are positive.
+//      `near` then advances to f. Reading W from the found triangle keeps this
+//      correct even where two chains meet the same fan triangle (at corners[1] and
+//      corners[m-1]): whichever chain splits first, the other simply finds the new,
+//      smaller triangle carrying its edge.
+// Developed and stress-tested in tests/triangulation_playground.py.
 std::vector<std::array<uint32_t, 3>>
-BSPcomplex::triangulateConvexFace(const std::vector<uint32_t>& poly, int n_max)
+BSPcomplex::triangulateConvexFace(
+    const std::vector<uint32_t>& poly, const std::vector<char>& is_flat)
 {
     const uint32_t n = (uint32_t)poly.size();
     std::vector<std::array<uint32_t, 3>> tris;
+    tris.reserve(n - 2);
 
-    auto is_corner = [&](uint32_t i) {
-        return genericPoint::orient2D(
-                   *vertices[poly[(i + n - 1) % n]], *vertices[poly[i]],
-                   *vertices[poly[(i + 1) % n]], n_max) != 0;
-    };
-
-    // 1) Fan the strictly-convex corners.
-    std::vector<uint32_t> corners;
+    // Corner indices, in boundary order.
+    tri_corner_list.clear();
     for (uint32_t i = 0; i < n; i++)
-        if (is_corner(i)) corners.push_back(i);
-    assert(corners.size() >= 3 &&
-           "triangulateConvexFace: degenerate (zero-area / non-convex) face");
-    for (size_t j = 1; j + 1 < corners.size(); j++)
-        tris.push_back({poly[corners[0]], poly[corners[j]], poly[corners[j + 1]]});
+        if (!is_flat[i]) tri_corner_list.push_back(i);
+    const size_t m = tri_corner_list.size();
+    assert(m >= 3 && "triangulateConvexFace: fewer than 3 corners (degenerate face)");
 
-    // 2) Insert each flat vertex by splitting the triangle whose boundary edge holds it.
-    for (uint32_t i = 0; i < n; i++) {
-        if (is_corner(i)) continue;
-        const uint32_t f = poly[i];
-        bool placed = false;
-        for (size_t ti = 0; ti < tris.size() && !placed; ti++) {
-            const std::array<uint32_t, 3> t = tris[ti];
-            for (int e = 0; e < 3 && !placed; e++) {
-                const uint32_t u = t[e], v = t[(e + 1) % 3], w = t[(e + 2) % 3];
-                if (genericPoint::orient2D(*vertices[u], *vertices[v], *vertices[f], n_max) != 0)
-                    continue; // f not on the line through edge (u,v)
-                // f (collinear with u,v) is strictly between them iff splitting
-                // (u,v,w) -> (u,f,w) + (f,v,w) keeps the parent orientation on both
-                // pieces (if f were outside [u,v] one piece would flip). This is the
-                // between-test and the positivity guarantee in one, orient2D only.
-                const int sp = genericPoint::orient2D(
-                    *vertices[u], *vertices[v], *vertices[w], n_max);
-                const int s1 = genericPoint::orient2D(
-                    *vertices[u], *vertices[f], *vertices[w], n_max);
-                const int s2 = genericPoint::orient2D(
-                    *vertices[f], *vertices[v], *vertices[w], n_max);
-                if (s1 != 0 && s2 != 0 && (s1 > 0) == (sp > 0) && (s2 > 0) == (sp > 0)) {
-                    tris[ti] = {u, f, w};
-                    tris.push_back({f, v, w});
-                    placed = true;
+    // 1) Fan the corners.
+    for (size_t j = 1; j + 1 < m; j++)
+        tris.push_back({poly[tri_corner_list[0]], poly[tri_corner_list[j]],
+                        poly[tri_corner_list[j + 1]]});
+
+    // 2) Insert the flats, run by run (chain between two consecutive corners).
+    for (size_t k = 0; k < m; k++) {
+        const uint32_t ca = tri_corner_list[k];
+        const uint32_t cb = tri_corner_list[(k + 1) % m];
+        if ((ca + 1) % n == cb) continue; // corners adjacent -> no flats on this chain
+        const uint32_t cb_v = poly[cb];
+        uint32_t near_v = poly[ca];
+        for (uint32_t i = (ca + 1) % n; i != cb; i = (i + 1) % n) {
+            const uint32_t f = poly[i];
+            // Find the current triangle carrying edge (near_v, cb_v) by integer match.
+            size_t ti = tris.size();
+            int p = -1;
+            for (size_t t = 0; t < tris.size() && p < 0; t++)
+                for (int e = 0; e < 3; e++) {
+                    const uint32_t a = tris[t][e], b = tris[t][(e + 1) % 3];
+                    if ((a == near_v && b == cb_v) || (a == cb_v && b == near_v)) {
+                        ti = t;
+                        p = e;
+                        break;
+                    }
                 }
-            }
+            assert(p >= 0 && "triangulateConvexFace: flat-run edge not found");
+            const uint32_t A = tris[ti][p];           // near_v or cb_v
+            const uint32_t B = tris[ti][(p + 1) % 3]; // the other of the pair
+            const uint32_t W = tris[ti][(p + 2) % 3]; // apex, off the chain line
+            // Split edge A->B at f, preserving winding: (A,f,W) + (f,B,W).
+            tris[ti] = {A, f, W};
+            tris.push_back({f, B, W});
+            near_v = f;
         }
-        assert(placed && "triangulateConvexFace: flat vertex not on any boundary edge");
     }
     return tris;
 }
@@ -2351,14 +2360,32 @@ void BSPcomplex::triangulateFace(uint64_t face_ind)
 {
     uint64_t num_face_edges = faces[face_ind].edges.size();
     if (num_face_edges <= 3) return;
+    const uint32_t n = (uint32_t)num_face_edges;
 
     // Boundary vertices (in order) and the face's dominant projection plane.
     std::vector<uint32_t> poly(num_face_edges, UINT32_MAX);
     list_faceVertices(faces[face_ind], poly);
     const int n_max = face_dominant_normal_component(faces[face_ind]);
 
-    // Robust, positive-area triangulation of the convex face.
-    std::vector<std::array<uint32_t, 3>> tris = triangulateConvexFace(poly, n_max);
+    // Classify each boundary vertex corner/flat. poly[i] is the shared endpoint of
+    // the boundary edges at positions (i-1) and i, so it is a flat (a Steiner point
+    // on a straight edge) when those two edges are aligned -- sub-edges of the same
+    // original edge, which is how every Steiner point arises. aligned_face_edges is a
+    // pure integer meshVertices comparison, so the common flats cost no predicate. We
+    // only fall back to the exact orient2D when the edges are NOT aligned; that test
+    // is non-degenerate (hence cheap) for a genuine corner and pays the expensive
+    // exact path only for the rare collinear-but-not-aligned vertex. This is what
+    // keeps triangulation off orient2D's exact-arithmetic fallback (its dominant cost).
+    tri_is_flat.assign(n, 0);
+    for (uint32_t i = 0; i < n; i++)
+        if (aligned_face_edges((i + n - 1) % n, i, faces[face_ind]) ||
+            genericPoint::orient2D(
+                *vertices[poly[(i + n - 1) % n]], *vertices[poly[i]],
+                *vertices[poly[(i + 1) % n]], n_max) == 0)
+            tri_is_flat[i] = 1;
+
+    // Robust, positive-area triangulation of the convex face (pure integer work).
+    std::vector<std::array<uint32_t, 3>> tris = triangulateConvexFace(poly, tri_is_flat);
 
 #ifndef NDEBUG
     // Assert the triangulation is a valid, all-positive cover of the face: exactly
