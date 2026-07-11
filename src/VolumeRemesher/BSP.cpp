@@ -2479,11 +2479,24 @@ void BSPcomplex::triangulateFace(uint64_t face_ind)
     assert(tris.size() == 1 && "triangulateFace: triangulation not fully realized");
 }
 
-//  Input: vertices indices of a BSPelement: vrts.
-// Output: nothing.
-// Note. a point representing the baricenter (or its approximation) is created
-//       and added to the vector vertices.
-void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts)
+// Append to `vertices` a point strictly interior to `cell` (its faces are already
+// triangulated), to be used as the apex that fans the cell into tetrahedra.
+//
+// Fast path: the double average of the cell vertices. For a convex cell the exact
+// vertex centroid is strictly interior, but its DOUBLE approximation can round
+// exactly onto a face plane (e.g. a shallow "pyramid" cell whose apex is barely off
+// an oblique base) -- then the fan tet on that face is degenerate (orient3D == 0) and
+// cannot be repaired by the winding-flip below. So we check every fan tet with the
+// exact orient3D predicate; if none is degenerate, keep the cheap explicit (double)
+// point. (A merely wrong-signed tet is not a problem -- the flip fixes it.)
+//
+// Otherwise fall back to an EXACT barycenter: implicitPoint3D_TBC of four
+// non-coplanar cell vertices. The centroid of four non-coplanar points lies in the
+// open interior of their tetrahedron, which is contained in the open interior of the
+// convex cell, so it is strictly interior to every face; and because TBC is an
+// implicit (rational) point, orient3D evaluates it exactly, never rounding onto a
+// plane.
+void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& cell)
 {
     double cx, cy, cz;
     double sum_x = 0.0, sum_y = 0.0, sum_z = 0.0;
@@ -2495,8 +2508,54 @@ void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts)
             sum_z += cz;
             np++;
         }
+    explicitPoint3D* cand = new explicitPoint3D(sum_x / np, sum_y / np, sum_z / np);
 
-    vertices.push_back(new explicitPoint3D(sum_x / np, sum_y / np, sum_z / np));
+    // Verify no fan tet (face, candidate) is degenerate.
+    bool ok = true;
+    for (uint64_t fi : cell.faces) {
+        vector<uint32_t> fv(3, UINT32_MAX);
+        list_faceVertices(faces[fi], fv);
+        if (genericPoint::orient3D(*vertices[fv[0]], *vertices[fv[1]], *vertices[fv[2]], *cand) ==
+            0) {
+            ok = false;
+            break;
+        }
+    }
+    if (ok) {
+        vertices.push_back(cand);
+        vrts_visit.push_back(0);
+        return;
+    }
+    delete cand;
+
+    // Exact fallback: barycenter of four affinely-independent (non-coplanar) cell
+    // vertices. Build the quadruple greedily -- add a vertex only if it is
+    // independent of the ones already chosen: the 2nd must be distinct (all cell
+    // vertices are), the 3rd not collinear with the first two, the 4th not coplanar
+    // with the first three. A non-degenerate (positive-volume) cell always has such
+    // a quadruple. quad[] never holds an out-of-range index, so the predicates below
+    // only ever see already-selected points.
+    const uint32_t n = (uint32_t)vrts.size();
+    uint32_t quad[4];
+    uint32_t nq = 0;
+    for (uint32_t i = 0; i < n && nq < 4; i++) {
+        const genericPoint& t = *vertices[vrts[i]];
+        bool independent;
+        if (nq < 2)
+            independent = true; // 1st vertex, and any distinct 2nd vertex
+        else if (nq == 2)
+            independent = genericPoint::orient2Dxy(*vertices[quad[0]], *vertices[quad[1]], t) != 0 ||
+                genericPoint::orient2Dyz(*vertices[quad[0]], *vertices[quad[1]], t) != 0 ||
+                genericPoint::orient2Dzx(*vertices[quad[0]], *vertices[quad[1]], t) != 0;
+        else // nq == 3
+            independent = genericPoint::orient3D(
+                              *vertices[quad[0]], *vertices[quad[1]], *vertices[quad[2]], t) != 0;
+        if (independent) quad[nq++] = vrts[i];
+    }
+    assert(nq == 4 && "computeBaricenter: cell has no 4 non-coplanar vertices (flat cell)");
+
+    vertices.push_back(new implicitPoint3D_TBC(
+        *vertices[quad[0]], *vertices[quad[1]], *vertices[quad[2]], *vertices[quad[3]]));
     vrts_visit.push_back(0);
 }
 
@@ -2608,7 +2667,7 @@ void BSPcomplex::makeTetrahedra(bool verbose)
 
             if (needs_barycenter) { // Cell need baricenter
                 decomposition_type[cell_i] = 2;
-                computeBaricenter(cell_vrts);
+                computeBaricenter(cell_vrts, cell);
                 decomposition_vrt[cell_i] = ((uint32_t)vertices.size() - 1);
                 tet_num += cell.faces.size();
             }

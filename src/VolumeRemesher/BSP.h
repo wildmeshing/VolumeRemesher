@@ -389,7 +389,7 @@ public:
     std::vector<std::array<uint32_t, 3>>
     triangulateConvexFace(const std::vector<uint32_t>& poly, const std::vector<char>& is_flat);
     void triangulateFace(uint64_t face_ind);
-    void computeBaricenter(const vector<uint32_t>& vrts);
+    void computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& cell);
     inline uint64_t triFace_oppEdge(const BSPface& face, uint32_t v);
     uint64_t triFace_shareEdge(const BSPcell& cell, uint64_t face_ind, uint64_t vOppEdge_ind);
     bool cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v);
