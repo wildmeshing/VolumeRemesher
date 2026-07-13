@@ -2,6 +2,13 @@
 #include <VolumeRemesher/implicit_point.h>
 #include "extended_predicates.h"
 
+#include <algorithm>
+#include <array>
+#include <map>
+#include <set>
+#include <utility>
+#include <vector>
+
 #define INTERSECTION 1
 #define IMPROPER_INTERSECTION 2
 #define IMPROPER_INTERSECTION_COUNTED 3
@@ -875,6 +882,232 @@ place_virtual_constraints(TetMesh* mesh, constraints_t* constraints, half_edge_t
     free(need_virtual_constraint);
 
     return num_virtual_constraints;
+}
+
+
+/*************************************************************/
+/** hole filling (cap open boundaries with fake triangles)  **/
+/*************************************************************/
+
+namespace {
+
+// Project the 3D coordinate c to 2D by dropping the dominant axis `dom` (0/1/2).
+inline void proj2d(const double* c, int dom, double out[2])
+{
+    int j = 0;
+    for (int i = 0; i < 3; i++)
+        if (i != dom) out[j++] = c[i];
+}
+
+// Is projected point p strictly inside the projected triangle (a,b,c) whose
+// orientation sign is `ori` (+1 or -1)? Uses the exact-sign 2D orientation, so the
+// answer is identical on every platform (points strictly on an edge do not count).
+inline bool
+point_in_tri2d(const double* p, const double* a, const double* b, const double* c, int ori)
+{
+    return signe_orient2d(a, b, p) == ori && signe_orient2d(b, c, p) == ori &&
+           signe_orient2d(c, a, p) == ori;
+}
+
+// Ear-clip one boundary loop (vertex indices, already oriented so the emitted cap
+// triangles carry the reversed boundary half-edges). Appends triangles (3 vertex
+// indices each) to `out`. All geometric decisions use exact-sign predicates so the
+// triangulation is deterministic across platforms. Falls back to a fan for the part
+// it cannot ear-clip (non-simple projection), guaranteeing the hole is capped.
+void ear_clip_loop(const std::vector<uint32_t>& loop, const TetMesh* mesh, std::vector<uint32_t>& out)
+{
+    const uint32_t k = (uint32_t)loop.size();
+    if (k < 3) return;
+
+    // Choose a projection plane from three spread-out loop vertices (exact, so the
+    // choice is platform-independent).
+    const double* A = mesh->vertices[loop[0]].coord;
+    const double* B = mesh->vertices[loop[k / 3]].coord;
+    const double* C = mesh->vertices[loop[2 * k / 3]].coord;
+    int dom = genericPoint::maxComponentInTriangleNormal(
+        A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2]);
+    if (dom < 0 || dom > 2) dom = 2;
+
+    std::vector<std::array<double, 2>> P(k);
+    for (uint32_t i = 0; i < k; i++) proj2d(mesh->vertices[loop[i]].coord, dom, P[i].data());
+
+    // Orientation of the projected polygon: the lexicographically-smallest vertex is
+    // a convex hull vertex, so the orient2d sign of its wedge is the polygon's sign.
+    uint32_t ex = 0;
+    for (uint32_t i = 1; i < k; i++) {
+        if (P[i][0] < P[ex][0] ||
+            (P[i][0] == P[ex][0] &&
+             (P[i][1] < P[ex][1] || (P[i][1] == P[ex][1] && loop[i] < loop[ex]))))
+            ex = i;
+    }
+    const int poly_ori =
+        signe_orient2d(P[(ex + k - 1) % k].data(), P[ex].data(), P[(ex + 1) % k].data());
+
+    // Doubly-linked list over the loop vertices for O(n^2) ear removal.
+    std::vector<uint32_t> nxt(k), prv(k);
+    for (uint32_t i = 0; i < k; i++) {
+        nxt[i] = (i + 1) % k;
+        prv[i] = (i + k - 1) % k;
+    }
+    uint32_t remaining = k, cur = 0;
+
+    if (poly_ori != 0) {
+        uint32_t stall = 0;
+        while (remaining > 3 && stall <= remaining) {
+            const uint32_t p = prv[cur], n = nxt[cur];
+            bool ear = signe_orient2d(P[p].data(), P[cur].data(), P[n].data()) == poly_ori;
+            if (ear)
+                for (uint32_t j = nxt[n]; j != p; j = nxt[j])
+                    if (point_in_tri2d(
+                            P[j].data(), P[p].data(), P[cur].data(), P[n].data(), poly_ori)) {
+                        ear = false;
+                        break;
+                    }
+            if (ear) {
+                out.push_back(loop[p]);
+                out.push_back(loop[cur]);
+                out.push_back(loop[n]);
+                nxt[p] = n;
+                prv[n] = p;
+                remaining--;
+                cur = p;
+                stall = 0;
+            } else {
+                cur = nxt[cur];
+                stall++;
+            }
+        }
+    }
+
+    // Fan-triangulate whatever is left (the final triangle in the normal case, or the
+    // remaining polygon if ear removal stalled on a non-simple projection).
+    std::vector<uint32_t> rem;
+    uint32_t it = cur;
+    do {
+        rem.push_back(it);
+        it = nxt[it];
+    } while (it != cur);
+    for (size_t i = 1; i + 1 < rem.size(); i++) {
+        out.push_back(loop[rem[0]]);
+        out.push_back(loop[rem[i]]);
+        out.push_back(loop[rem[i + 1]]);
+    }
+}
+
+} // namespace
+
+uint32_t fill_holes_in_constraints(constraints_t* constraints, const TetMesh* mesh, bool verbose)
+{
+    const uint32_t n_input = constraints->num_triangles;
+    constraints->num_input_triangles = n_input;
+    if (n_input == 0) return 0;
+
+    // Find the topological boundary: undirected edges used by exactly one triangle.
+    // Using the UNDIRECTED count (rather than "a->b present but b->a absent") makes
+    // this robust to inconsistently-oriented input, where an interior edge shared by
+    // two equally-wound triangles would otherwise look like two boundary half-edges.
+    // Each boundary edge is used by a single triangle, so its one directed occurrence
+    // gives a well-defined half-edge direction (and hence a consistent cap winding for
+    // consistently-oriented input).
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> ucount; // sorted pair -> use count
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> udir; // -> directed
+    for (uint32_t t = 0; t < n_input; t++)
+        for (int e = 0; e < 3; e++) {
+            const uint32_t a = constraints->tri_vertices[3 * t + e];
+            const uint32_t b = constraints->tri_vertices[3 * t + (e + 1) % 3];
+            std::pair<uint32_t, uint32_t> key = a < b ? std::make_pair(a, b) : std::make_pair(b, a);
+            ucount[key]++;
+            udir[key] = {a, b};
+        }
+
+    // Boundary half-edges, grouped by start vertex (sorted -> deterministic walk).
+    std::map<uint32_t, std::vector<uint32_t>> adj;
+    std::set<std::pair<uint32_t, uint32_t>> boundary;
+    for (const auto& kv : ucount)
+        if (kv.second == 1) {
+            const std::pair<uint32_t, uint32_t>& e = udir[kv.first];
+            adj[e.first].push_back(e.second);
+            boundary.insert(e);
+        }
+    if (boundary.empty()) {
+        if (verbose) printf("\tNo holes to fill (input surface is closed)\n");
+        return 0;
+    }
+
+    // Chain boundary half-edges into loops and cap each one.
+    std::set<std::pair<uint32_t, uint32_t>> used;
+    std::vector<uint32_t> cap_tris; // flat: 3 vertex indices per cap triangle
+    uint32_t num_loops = 0;
+    for (const auto& start : boundary) {
+        if (used.count(start)) continue;
+        std::vector<uint32_t> loop;
+        uint32_t a = start.first, b = start.second;
+        used.insert({a, b});
+        loop.push_back(a);
+        // Follow next boundary half-edges until we return to the start (or dead-end).
+        for (uint32_t guard = 0; guard <= (uint32_t)boundary.size(); guard++) {
+            loop.push_back(b);
+            if (b == start.first) break;
+            const auto ait = adj.find(b);
+            uint32_t nb = UINT32_MAX;
+            if (ait != adj.end())
+                for (uint32_t cand : ait->second)
+                    if (!used.count({b, cand})) {
+                        nb = cand;
+                        break;
+                    }
+            if (nb == UINT32_MAX) break; // open chain (non-manifold boundary): best effort
+            used.insert({b, nb});
+            b = nb;
+        }
+        // loop currently is [a, ..., a]; drop the duplicated closing vertex.
+        if (loop.size() >= 2 && loop.front() == loop.back()) loop.pop_back();
+        if (loop.size() < 3) continue;
+        // Reverse so the caps carry the reversed boundary half-edges (manifold-consistent).
+        std::reverse(loop.begin(), loop.end());
+        ear_clip_loop(loop, mesh, cap_tris);
+        num_loops++;
+    }
+
+    // Drop degenerate (collinear) caps: they are zero-area and would be rejected as
+    // constraints. The corresponding boundary stays open and is handled downstream by
+    // place_virtual_constraints exactly as before, so this degrades gracefully.
+    std::vector<uint32_t> kept;
+    kept.reserve(cap_tris.size());
+    for (size_t i = 0; i + 3 <= cap_tris.size(); i += 3) {
+        const double* v0 = mesh->vertices[cap_tris[i]].coord;
+        const double* v1 = mesh->vertices[cap_tris[i + 1]].coord;
+        const double* v2 = mesh->vertices[cap_tris[i + 2]].coord;
+        if (misAlignment(v0, v1, v2)) {
+            kept.push_back(cap_tris[i]);
+            kept.push_back(cap_tris[i + 1]);
+            kept.push_back(cap_tris[i + 2]);
+        }
+    }
+    const uint32_t n_cap = (uint32_t)(kept.size() / 3);
+    if (n_cap == 0) {
+        if (verbose)
+            printf("\t%u hole loop(s) found but produced no usable caps\n", num_loops);
+        return 0;
+    }
+
+    // Append the cap constraints after the real input constraints.
+    const uint32_t n_total = n_input + n_cap;
+    constraints->tri_vertices = (uint32_t*)realloc(
+        constraints->tri_vertices, 3 * n_total * sizeof(uint32_t));
+    for (uint32_t i = 0; i < 3 * n_cap; i++)
+        constraints->tri_vertices[3 * n_input + i] = kept[i];
+    if (constraints->tri_original_index) {
+        constraints->tri_original_index = (uint32_t*)realloc(
+            constraints->tri_original_index, n_total * sizeof(uint32_t));
+        for (uint32_t i = 0; i < n_cap; i++)
+            constraints->tri_original_index[n_input + i] = UINT32_MAX; // caps: no input index
+    }
+    constraints->num_triangles = n_total;
+
+    if (verbose)
+        printf("\tFilled %u hole loop(s) with %u cap triangles\n", num_loops, n_cap);
+    return n_cap;
 }
 
 

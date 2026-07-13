@@ -910,6 +910,12 @@ BSPcomplex::BSPcomplex(
 
     // Uploading the constraints (the last num_virtual_triangles constraints are virtual.)
     first_virtual_constraint = _constraints->num_triangles - _constraints->num_virtual_triangles;
+    // Real constraints are [0, first_virtual_constraint): genuine input triangles in
+    // [0, first_fake_constraint) and hole-cap "fake" triangles in the rest. When no
+    // holes were filled (num_input_triangles unset), everything real is input.
+    first_fake_constraint = (_constraints->num_input_triangles > 0)
+        ? _constraints->num_input_triangles
+        : first_virtual_constraint;
     constraints_vrts.resize(3 * _constraints->num_triangles);
     constraint_group.resize(_constraints->num_triangles);
     for (uint32_t i = 0; i < _constraints->num_triangles; i++) {
@@ -2791,7 +2797,9 @@ static bool coplanar_tris_overlap(
 // group; a triangle with no coplanar neighbour is its own singleton group.
 void BSPcomplex::computeCoplanarGroups()
 {
-    const uint32_t n = first_virtual_constraint; // real constraints are [0, n)
+    // Group only genuine input triangles [0, first_fake_constraint). Hole-cap "fake"
+    // constraints and virtual constraints carry no provenance and are left ungrouped.
+    const uint32_t n = first_fake_constraint;
     std::vector<uint32_t> parent(n);
     for (uint32_t i = 0; i < n; i++) parent[i] = i;
     auto find = [&](uint32_t x) {
@@ -2893,7 +2901,10 @@ void BSPcomplex::trackFaceProvenance()
                 const BSPface& face = faces[fi];
                 const int n_max = face_dominant_normal_component(face);
                 for (uint32_t constr : face.coplanar_constraints) {
-                    if (is_virtual(constr)) continue;
+                    // Skip hole-cap (fake) and virtual constraints: only genuine input
+                    // triangles [0, first_fake_constraint) contribute provenance, so a
+                    // face lying only on caps stays untagged and is not reported.
+                    if (constr >= first_fake_constraint) continue;
                     const uint32_t cID = 3 * constr;
                     if (coplanar_tris_overlap(
                             *vertices[a], *vertices[b], *vertices[c],

@@ -202,6 +202,11 @@ public:
     // constraints_vrts.size()/3 .
     std::vector<CONSTR_GROUP_T> constraint_group;
     uint32_t first_virtual_constraint;
+    // Constraints in [first_fake_constraint, first_virtual_constraint) are hole-cap
+    // ("fake") triangles inserted to close open boundaries; they bound the volume but
+    // carry no input provenance and are excluded from the surface tracking. Equals
+    // first_virtual_constraint when no holes were filled.
+    uint32_t first_fake_constraint;
     // Per real constraint: its triangle index in the input file (before degenerate
     // triangles were dropped). Empty if the input did not provide it.
     std::vector<uint32_t> constraint_original_index;
@@ -473,7 +478,17 @@ BSPcomplex* makePolyhedralMesh(
     char bool_opcode = '0',
     bool free_mem = false,
     bool verbose = false,
-    bool logging = false);
+    bool logging = false,
+    // Cap open boundaries with ear-clipped "fake" triangles before meshing. Opt-in
+    // (off by default): the exact surface tracking is obtained with keep_all_cells,
+    // which needs no caps. Caps only help the solid-output (min-cut) path close open
+    // boundaries, at the cost of a non-planar cap possibly slicing through the shell.
+    bool fill_holes = false,
+    // Keep the entire tetrahedralized domain instead of only the solid interior: skip
+    // the in/out min-cut classification (mark every cell internal). This makes the
+    // BLACK-face surface tracking exact -- see makePolyhedralMesh. Intended for the
+    // single-input tracking path (bool_opcode == '0').
+    bool keep_all_cells = false);
 
 /// <summary>
 /// Same as above, but file B represents a tetrahedral mesh where A will be embedded

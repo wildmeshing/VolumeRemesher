@@ -104,12 +104,15 @@ std::string run_tracking_check(const std::string& model, bool strict) {
     const std::string vt = VRTEST_VERIFY_TRACKING;
     const std::string strictflag = strict ? " --strict" : "";
     std::string gen, chk;
+    // -a (keep_all_cells): skip the in/out min-cut and tetrahedralize the whole domain,
+    // so every input triangle is realized as a face between two kept cells and the
+    // surface tracking is exact (no thin feature shaved off, no near-coplanar loss).
 #ifdef _WIN32
-    gen = "cd /d \"" + work.string() + "\" && \"" + bin + "\" \"" + model + "\" -t -r > nul 2>&1";
+    gen = "cd /d \"" + work.string() + "\" && \"" + bin + "\" \"" + model + "\" -t -r -a > nul 2>&1";
     chk = "cd /d \"" + work.string() + "\" && \"" + vt + "\" \"" + model + "\" volume.tet" +
           strictflag + " > vt.out 2>&1";
 #else
-    gen = "cd '" + work.string() + "' && '" + bin + "' '" + model + "' -t -r > /dev/null 2>&1";
+    gen = "cd '" + work.string() + "' && '" + bin + "' '" + model + "' -t -r -a > /dev/null 2>&1";
     chk = "cd '" + work.string() + "' && '" + vt + "' '" + model + "' volume.tet" + strictflag +
           " > vt.out 2>&1";
 #endif
@@ -129,17 +132,24 @@ std::string run_tracking_check(const std::string& model, bool strict) {
 
 // A small, representative set covering every tracking behavior: exactly-coplanar
 // clusters (cube_subdiv, upsample_box), disconnected coplanar planes (two_cubes),
-// coplanar overlap (cube_on_cube), curved/near-coplanar (sphere, double_sphere), and
-// dropped-degenerate-triangle indexing (112856simplified). Exactly-coplanar inputs
-// must pass the strict area check; the rest need only soundness + flag (coverage is
-// an expected warning). Large meshes (bunny/Octocat/...) are intentionally excluded:
-// the exact-rational verifier is slow on them with the no-GMP bignum backend, and
-// they add no new behavior -- verify them locally with tests/verify_tracking.
+// coplanar overlap (cube_on_cube), curved surfaces (sphere, double_sphere), an OPEN
+// boundary (open_box, the regression guard for open-surface preservation), and
+// dropped-degenerate-triangle indexing (112856simplified). Because the tracking runs
+// with -a (keep_all_cells), every well-formed input -- flat, curved, or open -- is
+// reconstructed EXACTLY, so all of these are checked strictly (under=0).
+//
+// 112856simplified is the lone exception: it contains overlapping coplanar input
+// triangles (a defective "simplified" mesh -- one 241-triangle group whose summed
+// area exceeds the area of their union). The mesher correctly realizes the union, so
+// the sum-of-areas coverage check under-counts by construction; it is checked
+// non-strictly (soundness + flag only). Large meshes (bunny/Octocat/...) are excluded:
+// the exact-rational verifier is slow on them with the no-GMP bignum backend, and they
+// add no new behavior -- verify them locally with tests/verify_tracking.
 struct TrackModel { const char* file; bool strict; };
 static const TrackModel kTrackModels[] = {
     {"cube_subdiv.off", true}, {"two_cubes.off", true}, {"cube_on_cube.off", true},
-    {"upsample_box.off", true}, {"sphere.off", false}, {"double_sphere.off", false},
-    {"112856simplified.off", false},
+    {"upsample_box.off", true}, {"sphere.off", true}, {"double_sphere.off", true},
+    {"open_box.off", true}, {"112856simplified.off", false},
 };
 
 TEST_CASE("integration: -t face-provenance tracking is exact", "[integration][tracking]") {

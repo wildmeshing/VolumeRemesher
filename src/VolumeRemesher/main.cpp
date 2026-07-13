@@ -204,6 +204,10 @@ int main(int argc, char** argv)
                "-b = save the subdivided constraints to 'black_faces.off'\n"
                "-t = triangulate/tetrahedrize output\n"
                "-r = with -t, also write exact-rational vertex coords to 'volume.tet.rational'\n"
+               "-a = keep all cells: skip the in/out min-cut and tetrahedralize the whole\n"
+               "     domain, so the -t surface tracking is exact (no cells are deleted)\n"
+               "-f = fill holes: cap open boundaries with ear-clipped triangles (off by\n"
+               "     default; only affects the solid-output min-cut path)\n"
                "bool_opcode: {U, I, D}\n"
                "  U -> union (AuB),\n"
                "  I -> intersection (A^B),\n"
@@ -219,6 +223,8 @@ int main(int argc, char** argv)
     bool surfmesh = false;
     bool blackfaces = false;
     bool export_rational = false;
+    bool fill_holes = false; // -f: opt-in cap of open boundaries (solid-output path)
+    bool keep_all_cells = false; // -a: skip in/out min-cut, keep the whole domain
     char* fileA_name = NULL;
     char* fileB_name = NULL;
     char bool_opcode = '0';
@@ -237,6 +243,10 @@ int main(int argc, char** argv)
                 surfmesh = true;
             else if (argv[i][1] == 'r')
                 export_rational = true;
+            else if (argv[i][1] == 'f')
+                fill_holes = true;
+            else if (argv[i][1] == 'a')
+                keep_all_cells = true;
             else
                 ip_error("Unknown option\n");
         } else if (fileA_name == NULL)
@@ -343,7 +353,9 @@ int main(int argc, char** argv)
             bool_opcode,
             true,
             verbose,
-            logging);
+            logging,
+            fill_holes,
+            keep_all_cells);
 
     printf("Writing output file...\n");
     if (blackfaces)

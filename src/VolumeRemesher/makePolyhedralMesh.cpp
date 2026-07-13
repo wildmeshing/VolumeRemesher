@@ -378,7 +378,9 @@ BSPcomplex* makePolyhedralMesh(
     char bool_opcode,
     bool free_mem,
     bool verbose,
-    bool logging)
+    bool logging,
+    bool fill_holes,
+    bool keep_all_cells)
 {
     // saveVRML("input1.wrl", coords_A, npts_A, tri_idx_A, ntri_A, false);
     // saveVRML("input2.wrl", coords_A, npts_A, tri_idx_A, ntri_A, true);
@@ -419,6 +421,11 @@ BSPcomplex* makePolyhedralMesh(
             &constraints->num_triangles,
             &constraints->tri_original_index,
             verbose);
+        // Cap open boundaries so that every input triangle bounds a closed volume
+        // (see fill_holes_in_constraints). The cap triangles are excluded from the
+        // surface tracking. Must run before the Delaunay permutation and virtual
+        // constraints below, so the caps are remapped/handled just like real input.
+        if (fill_holes) fill_holes_in_constraints(constraints, mesh, verbose);
         constraints->constr_group = (uint32_t*)calloc(constraints->num_triangles, sizeof(uint32_t));
     } else { // two input
         read_nodes_and_constraints_twoInput(
@@ -647,7 +654,16 @@ BSPcomplex* makePolyhedralMesh(
     if (verbose) printf("\tFind black faces %f s\n", (double)(time7 - time6) / CLOCKS_PER_SEC);
 
     //-Classification:intrenal/external cells-------------------------------------
-    complex.constraintsSurface_complexPartition(bool_opcode != '0');
+    if (keep_all_cells) {
+        // Skip the min-cut in/out classification and keep the WHOLE tetrahedralized
+        // domain. Every input triangle is then realized as a face shared by two kept
+        // cells, so the BLACK-face surface tagging is exact: no cell is deleted, hence
+        // no thin feature (e.g. an open-boundary flap) is shaved off by the
+        // area-minimizing cut. Marking every cell INTERNAL_A makes makeTetrahedra keep
+        // them all without any further plumbing.
+        for (BSPcell& c : complex.cells) c.place = INTERNAL_A;
+    } else
+        complex.constraintsSurface_complexPartition(bool_opcode != '0');
 
     clock_t time8 = clock();
     if (verbose) printf("\tInt-ext class. %f s\n", (double)(time8 - time7) / CLOCKS_PER_SEC);
