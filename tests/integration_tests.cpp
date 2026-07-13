@@ -127,14 +127,19 @@ std::string run_tracking_check(const std::string& model, bool strict) {
 
 } // namespace
 
-// Exactly-coplanar inputs must pass the strict area check; near-coplanar (curved)
-// inputs need only pass soundness + flag (coverage is an expected warning there).
+// A small, representative set covering every tracking behavior: exactly-coplanar
+// clusters (cube_subdiv, upsample_box), disconnected coplanar planes (two_cubes),
+// coplanar overlap (cube_on_cube), curved/near-coplanar (sphere, double_sphere), and
+// dropped-degenerate-triangle indexing (112856simplified). Exactly-coplanar inputs
+// must pass the strict area check; the rest need only soundness + flag (coverage is
+// an expected warning). Large meshes (bunny/Octocat/...) are intentionally excluded:
+// the exact-rational verifier is slow on them with the no-GMP bignum backend, and
+// they add no new behavior -- verify them locally with tests/verify_tracking.
 struct TrackModel { const char* file; bool strict; };
 static const TrackModel kTrackModels[] = {
     {"cube_subdiv.off", true}, {"two_cubes.off", true}, {"cube_on_cube.off", true},
     {"upsample_box.off", true}, {"sphere.off", false}, {"double_sphere.off", false},
-    {"bunny.off", false}, {"112856simplified.off", false}, {"100071_sf.off", false},
-    {"37989_sf.off", false}, {"Octocat.off", false}, {"Octocat-v1.off", false},
+    {"112856simplified.off", false},
 };
 
 TEST_CASE("integration: -t face-provenance tracking is exact", "[integration][tracking]") {
