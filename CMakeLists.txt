@@ -5,8 +5,8 @@ cmake_minimum_required(VERSION 3.25)
 # Older x86/x64 processors may support SSE2 but not AVX2.
 # Very old x86/x64 processors, or non x86/x64 
 # processors, do not support any of the two.
-set(ENABLE_SSE2 True)
-set(ENABLE_AVX2 True)
+option(VOLREM_ENABLE_SSE2 "Enable SSE2 instructions" ON)
+option(VOLREM_ENABLE_AVX2 "Enable AVX2 instructions" ON)
 
 #####################
 
@@ -61,7 +61,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 	# fenv_access keep the SIMD interval arithmetic rounding outward under
 	# FE_UPWARD. (This was disabled while an unrelated half-edge ordering
 	# nondeterminism made Windows diverge; that bug is now fixed in conforming_mesh.cpp.)
-	if(ENABLE_AVX2)
+	if(VOLREM_ENABLE_AVX2)
 		target_compile_options(${PROJECT_NAME}_lib PUBLIC "/arch:AVX2")
 	endif()
 # reserve enough stack size
@@ -85,10 +85,10 @@ else()
 		# invalid here. The code emulates the x86 AVX2/FMA intrinsics on top
 		# of NEON via SIMDe, which is fetched below.
 	else()
-		if(ENABLE_AVX2)
+		if(VOLREM_ENABLE_AVX2)
 			target_compile_options(${PROJECT_NAME}_lib PUBLIC "-mavx2")
 			target_compile_options(${PROJECT_NAME}_lib PUBLIC "-mfma")
-		elseif(ENABLE_SSE2)
+		elseif(VOLREM_ENABLE_SSE2)
 			target_compile_options(${PROJECT_NAME}_lib PUBLIC "-msse2")
 		endif()
 	endif()
