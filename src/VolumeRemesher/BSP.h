@@ -202,6 +202,9 @@ public:
     // constraints_vrts.size()/3 .
     std::vector<CONSTR_GROUP_T> constraint_group;
     uint32_t first_virtual_constraint;
+    // Per real constraint: its triangle index in the input file (before degenerate
+    // triangles were dropped). Empty if the input did not provide it.
+    std::vector<uint32_t> constraint_original_index;
 
     std::vector<uint32_t> final_tets; // Simple vector storing the tetrahedra
     // (only used when saving a tet-mesh)
@@ -210,6 +213,28 @@ public:
     // final_tets[4*k .. 4*k+3]). Filled by makeTetrahedra so the surface-embedding
     // path can map every output tet back to the cell it was carved from.
     std::vector<uint32_t> final_tets_parent_cell;
+
+    // Coplanar grouping of the input constraints: input triangles are partitioned
+    // into maximal edge-connected coplanar groups (a flat region = one group, a
+    // triangle with no coplanar neighbour = a singleton group). Filled by
+    // computeCoplanarGroups(). constraint_coplanar_group[c] is the group id (0..K-1)
+    // of real constraint c; group_size[g] is how many triangles are in group g.
+    std::vector<uint32_t> constraint_coplanar_group;
+    std::vector<uint32_t> coplanar_group_size;
+
+    // Input-surface provenance of the output tet faces (interior faces carry no tag).
+    // Filled by trackFaceProvenance() during makeTetrahedra. Face `local_face` of tet
+    // `tet` is the triangle opposite that tet's local vertex `local_face`. It is
+    // reported by the coplanar GROUP(s) it overlaps: normally one, but more than one
+    // where two exactly-coplanar surfaces overlap on the same plane (e.g. a small cube
+    // resting on a larger one -- the shared face lies on both objects' groups).
+    struct FaceProvenance
+    {
+        uint32_t tet;
+        uint8_t local_face; // 0..3
+        std::vector<uint32_t> groups; // coplanar groups the face overlaps
+    };
+    std::vector<FaceProvenance> face_provenance;
 
 
     // Supporting vectors
@@ -265,7 +290,11 @@ public:
     void saveSkin(const char* filename, const char bool_opcode, bool triangulate = false);
 
     // Save the mesh
-    void saveMesh(const char* filename, const char bool_opcode, bool tetrahedrize = false);
+    void saveMesh(
+        const char* filename,
+        const char bool_opcode,
+        bool tetrahedrize = false,
+        bool export_rational = false);
 
     // Makes a triangle mesh out of the skin faces
     void extractSkinTriMesh(
@@ -402,6 +431,13 @@ public:
     // boolean classification. The surface-embedding path uses this because it
     // keeps the whole background domain instead of one boolean region.
     void makeTetrahedra(bool verbose = false, bool keep_all_cells = false);
+
+    // Partitions the input constraints into edge-connected coplanar groups.
+    void computeCoplanarGroups();
+
+    // Fills face_provenance: for each output tet face lying on the input surface,
+    // the coplanar group it belongs to. Called from makeTetrahedra.
+    void trackFaceProvenance();
 };
 
 /// <summary>

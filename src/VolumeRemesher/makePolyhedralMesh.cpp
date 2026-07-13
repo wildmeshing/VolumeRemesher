@@ -102,6 +102,7 @@ void read_nodes_and_constraints(
     uint32_t* npts,
     uint32_t** tri_vertices_p,
     uint32_t* ntri,
+    uint32_t** tri_original_p,
     bool verbose)
 {
     // Reading points coordinates.
@@ -111,6 +112,7 @@ void read_nodes_and_constraints(
     uint32_t* diff = (uint32_t*)calloc(*npts, sizeof(uint32_t));
     uint32_t* map = (uint32_t*)malloc(*npts * sizeof(uint32_t));
     *tri_vertices_p = (uint32_t*)malloc(sizeof(uint32_t) * 3 * (*ntri));
+    *tri_original_p = (uint32_t*)malloc(sizeof(uint32_t) * (*ntri));
 
     for (uint32_t i = 0; i < (*npts); i++) {
         tmp[i].coord[0] = coords_A[i * 3];
@@ -138,8 +140,10 @@ void read_nodes_and_constraints(
 
         if (!misAlignment(v1c, v2c, v3c))
             (*ntri)--;
-        else
+        else {
+            (*tri_original_p)[i] = j; // remember this constraint's input-file index
             i++;
+        }
     }
     free(map);
     free(diff);
@@ -413,6 +417,7 @@ BSPcomplex* makePolyhedralMesh(
             &mesh->num_vertices,
             &constraints->tri_vertices,
             &constraints->num_triangles,
+            &constraints->tri_original_index,
             verbose);
         constraints->constr_group = (uint32_t*)calloc(constraints->num_triangles, sizeof(uint32_t));
     } else { // two input
@@ -716,6 +721,7 @@ BSPcomplex* remakePolyhedralMesh(
         &num_vertices,
         &constraints->tri_vertices,
         &constraints->num_triangles,
+        &constraints->tri_original_index,
         verbose);
     constraints->constr_group = (uint32_t*)calloc(constraints->num_triangles, sizeof(uint32_t));
 

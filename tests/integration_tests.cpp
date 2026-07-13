@@ -90,7 +90,67 @@ std::string run_and_hash(const std::string& model, const std::string& mode) {
     return digest;
 }
 
+// Run `mesh_generator -t -r` then the independent verify_tracking on 'model' and
+// return the last line of verify_tracking's output ("TRACKING OK" on success). The
+// exact-rational verifier is the source of truth for the face-provenance tracking.
+std::string run_tracking_check(const std::string& model, bool strict) {
+    static int counter = 1000000;
+    fs::path work = fs::temp_directory_path() / ("vrtrack_" + std::to_string(counter++));
+    std::error_code ec;
+    fs::remove_all(work, ec);
+    fs::create_directories(work, ec);
+
+    const std::string bin = VRTEST_MESH_GENERATOR;
+    const std::string vt = VRTEST_VERIFY_TRACKING;
+    const std::string strictflag = strict ? " --strict" : "";
+    std::string gen, chk;
+#ifdef _WIN32
+    gen = "cd /d \"" + work.string() + "\" && \"" + bin + "\" \"" + model + "\" -t -r > nul 2>&1";
+    chk = "cd /d \"" + work.string() + "\" && \"" + vt + "\" \"" + model + "\" volume.tet" +
+          strictflag + " > vt.out 2>&1";
+#else
+    gen = "cd '" + work.string() + "' && '" + bin + "' '" + model + "' -t -r > /dev/null 2>&1";
+    chk = "cd '" + work.string() + "' && '" + vt + "' '" + model + "' volume.tet" + strictflag +
+          " > vt.out 2>&1";
+#endif
+    std::system(gen.c_str());
+    std::system(chk.c_str());
+
+    std::string out, line;
+    std::ifstream f((work / "vt.out").string());
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    out = ss.str();
+    fs::remove_all(work, ec);
+    return out;
+}
+
 } // namespace
+
+// Exactly-coplanar inputs must pass the strict area check; near-coplanar (curved)
+// inputs need only pass soundness + flag (coverage is an expected warning there).
+struct TrackModel { const char* file; bool strict; };
+static const TrackModel kTrackModels[] = {
+    {"cube_subdiv.off", true}, {"two_cubes.off", true}, {"cube_on_cube.off", true},
+    {"upsample_box.off", true}, {"sphere.off", false}, {"double_sphere.off", false},
+    {"bunny.off", false}, {"112856simplified.off", false}, {"100071_sf.off", false},
+    {"37989_sf.off", false}, {"Octocat.off", false}, {"Octocat-v1.off", false},
+};
+
+TEST_CASE("integration: -t face-provenance tracking is exact", "[integration][tracking]") {
+    for (const auto& tm : kTrackModels) {
+        DYNAMIC_SECTION(tm.file << (tm.strict ? " [strict]" : " [lenient]")) {
+            const fs::path model = fs::path(VRTEST_MODELS_DIR) / tm.file;
+            if (!fs::exists(model)) {
+                WARN("model not present, skipping: " << tm.file);
+            } else {
+                const std::string out = run_tracking_check(model.string(), tm.strict);
+                INFO(out);
+                REQUIRE(out.find("TRACKING OK") != std::string::npos);
+            }
+        }
+    }
+}
 
 TEST_CASE("integration: model outputs are byte-stable across platforms", "[integration]") {
     const auto entries = load_manifest();

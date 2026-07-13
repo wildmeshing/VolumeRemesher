@@ -203,6 +203,7 @@ int main(int argc, char** argv)
                "-s = save the mesh bounding surface to 'skin.off'\n"
                "-b = save the subdivided constraints to 'black_faces.off'\n"
                "-t = triangulate/tetrahedrize output\n"
+               "-r = with -t, also write exact-rational vertex coords to 'volume.tet.rational'\n"
                "bool_opcode: {U, I, D}\n"
                "  U -> union (AuB),\n"
                "  I -> intersection (A^B),\n"
@@ -217,6 +218,7 @@ int main(int argc, char** argv)
     bool logging = false;
     bool surfmesh = false;
     bool blackfaces = false;
+    bool export_rational = false;
     char* fileA_name = NULL;
     char* fileB_name = NULL;
     char bool_opcode = '0';
@@ -233,6 +235,8 @@ int main(int argc, char** argv)
                 blackfaces = true;
             else if (argv[i][1] == 's')
                 surfmesh = true;
+            else if (argv[i][1] == 'r')
+                export_rational = true;
             else
                 ip_error("Unknown option\n");
         } else if (fileA_name == NULL)
@@ -350,7 +354,8 @@ int main(int argc, char** argv)
         complex->saveMesh(
             (triangulate) ? ("volume.tet") : ("volume.msh"),
             bool_opcode,
-            triangulate);
+            triangulate,
+            export_rational);
     printf("Done.\n");
 
     // make/remakePolyhedralMesh return an owning pointer; the caller must free it.

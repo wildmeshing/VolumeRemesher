@@ -27,16 +27,21 @@ public:
     uint32_t num_virtual_triangles; // virtual constraints are indexed
     // from num_triangles - num_virtual_triangles
     // to num_triangles-1.
+    uint32_t* tri_original_index; // per (real) constraint: its index in the input
+    // file's triangle list, before degenerate triangles were dropped. NULL if not
+    // tracked. Length = number of real (non-virtual) constraints.
 
     constraints_t()
         : tri_vertices(NULL)
         , num_triangles(0)
         , constr_group(NULL)
-        , num_virtual_triangles(0) {};
+        , num_virtual_triangles(0)
+        , tri_original_index(NULL) {};
     ~constraints_t()
     {
         if (tri_vertices) free(tri_vertices);
         if (constr_group) free(constr_group);
+        if (tri_original_index) free(tri_original_index);
     }
 };
 

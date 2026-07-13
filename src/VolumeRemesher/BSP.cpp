@@ -4,6 +4,7 @@
 #include <cassert>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
 #include "delaunay.h"
 
@@ -916,6 +917,12 @@ BSPcomplex::BSPcomplex(
         constraints_vrts[3 * i + 1] = _constraints->tri_vertices[3 * i + 1];
         constraints_vrts[3 * i + 2] = _constraints->tri_vertices[3 * i + 2];
         constraint_group[i] = _constraints->constr_group[i];
+    }
+    // Copy the input-file triangle index of each real (non-virtual) constraint.
+    if (_constraints->tri_original_index) {
+        constraint_original_index.resize(first_virtual_constraint);
+        for (uint32_t i = 0; i < first_virtual_constraint; i++)
+            constraint_original_index[i] = _constraints->tri_original_index[i];
     }
 
     // Establish new tetrahedtra-(cell) indexing: only non-ghost cell are indexed.
@@ -2227,6 +2234,10 @@ void BSPcomplex::triangle_detach(uint64_t face_ind)
     new_face.edges.push_back(s_20_ind);
     new_face.edges.push_back(s_12_ind);
     new_face.edges.push_back(s_01_ind);
+    // The sub-triangle lies on the same plane as its parent, so it inherits the same
+    // coplanar input constraints (needed by face-provenance tracking). Empty for
+    // WHITE (interior) faces, so this is free there.
+    new_face.coplanar_constraints = faces[face_ind].coplanar_constraints;
 
     cells[faces[face_ind].conn_cells[0]].faces.push_back(new_face_ind);
     if (!IS_GHOST_CELL(faces[face_ind].conn_cells[1]))
@@ -2730,7 +2741,174 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
                 *vertices[final_tets[t + 3]]) < 0)
             std::swap(final_tets[t + 2], final_tets[t + 3]);
 
+    // Tag output tet faces that lie on the input surface with their input triangles.
+    // Done after the winding-flip so local-face indices match the emitted vertex order.
+    trackFaceProvenance();
+
     if (verbose) printf("Tetrahedra: %lu\n", final_tets.size() / 4);
+}
+
+// Do the two coplanar triangles f0f1f2 and t0t1t2 overlap with positive area?
+// Separating-axis test in the face's dominant plane (n_max) using the exact orient2D
+// predicate: the triangles' interiors are disjoint iff some edge of one has the whole
+// other triangle on its closed outer side. Edge/vertex-only contact => no overlap.
+static bool coplanar_tris_overlap(
+    const genericPoint& f0,
+    const genericPoint& f1,
+    const genericPoint& f2,
+    const genericPoint& t0,
+    const genericPoint& t1,
+    const genericPoint& t2,
+    int n_max)
+{
+    const genericPoint* F[3] = {&f0, &f1, &f2};
+    const genericPoint* T[3] = {&t0, &t1, &t2};
+    // For each triangle, test each of its edges as a separating axis against the other.
+    for (int pass = 0; pass < 2; pass++) {
+        const genericPoint** P = pass ? T : F; // edges from P
+        const genericPoint** Q = pass ? F : T; // tested against Q
+        for (int e = 0; e < 3; e++) {
+            const genericPoint& a = *P[e];
+            const genericPoint& b = *P[(e + 1) % 3];
+            const genericPoint& c = *P[(e + 2) % 3]; // interior side of edge (a,b)
+            const int in_side = genericPoint::orient2D(a, b, c, n_max);
+            if (in_side == 0) continue; // degenerate edge, not a valid axis
+            // Separating iff no Q vertex is strictly on P's interior side of (a,b).
+            bool separating = true;
+            for (int q = 0; q < 3 && separating; q++) {
+                const int s = genericPoint::orient2D(a, b, *Q[q], n_max);
+                if (s != 0 && (s > 0) == (in_side > 0)) separating = false;
+            }
+            if (separating) return false;
+        }
+    }
+    return true;
+}
+
+// Partition the real input constraints into maximal groups that are transitively
+// edge-adjacent AND coplanar. Two triangles sharing an edge are in the same group
+// iff their four vertices are coplanar (exact orient3D). A flat region becomes one
+// group; a triangle with no coplanar neighbour is its own singleton group.
+void BSPcomplex::computeCoplanarGroups()
+{
+    const uint32_t n = first_virtual_constraint; // real constraints are [0, n)
+    std::vector<uint32_t> parent(n);
+    for (uint32_t i = 0; i < n; i++) parent[i] = i;
+    auto find = [&](uint32_t x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    auto other_v = [&](uint32_t c, uint32_t x, uint32_t y) -> uint32_t {
+        for (int e = 0; e < 3; e++) {
+            const uint32_t v = constraints_vrts[3 * c + e];
+            if (v != x && v != y) return v;
+        }
+        return UINT32_MAX;
+    };
+
+    // Map each undirected constraint edge to the constraints that use it.
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> edge_map;
+    for (uint32_t c = 0; c < n; c++)
+        for (int e = 0; e < 3; e++) {
+            uint32_t v0 = constraints_vrts[3 * c + e];
+            uint32_t v1 = constraints_vrts[3 * c + (e + 1) % 3];
+            if (v0 > v1) std::swap(v0, v1);
+            edge_map[{v0, v1}].push_back(c);
+        }
+    // Union constraints that share an edge and are coplanar.
+    for (const auto& kv : edge_map) {
+        const uint32_t v0 = kv.first.first, v1 = kv.first.second;
+        const std::vector<uint32_t>& cs = kv.second;
+        for (size_t i = 0; i < cs.size(); i++)
+            for (size_t j = i + 1; j < cs.size(); j++)
+                if (genericPoint::orient3D(*vertices[v0], *vertices[v1],
+                        *vertices[other_v(cs[i], v0, v1)], *vertices[other_v(cs[j], v0, v1)]) == 0) {
+                    const uint32_t ra = find(cs[i]), rb = find(cs[j]);
+                    if (ra != rb) parent[ra] = rb;
+                }
+    }
+
+    // Compact group roots to ids 0..K-1 and count group sizes.
+    constraint_coplanar_group.assign(n, 0);
+    coplanar_group_size.clear();
+    std::map<uint32_t, uint32_t> root_id;
+    for (uint32_t c = 0; c < n; c++) {
+        const uint32_t r = find(c);
+        auto it = root_id.find(r);
+        uint32_t g;
+        if (it == root_id.end()) {
+            g = (uint32_t)root_id.size();
+            root_id[r] = g;
+            coplanar_group_size.push_back(0);
+        } else
+            g = it->second;
+        constraint_coplanar_group[c] = g;
+        coplanar_group_size[g]++;
+    }
+}
+
+void BSPcomplex::trackFaceProvenance()
+{
+    face_provenance.clear();
+    computeCoplanarGroups();
+
+    // Index every BLACK (on-surface) triangular face by its sorted vertex triple, so a
+    // tet face can be matched to the BSP face it came from by exact integer identity.
+    std::map<std::array<uint32_t, 3>, uint64_t> black_face;
+    for (uint64_t fi = 0; fi < faces.size(); fi++) {
+        const BSPface& face = faces[fi];
+        if (face.colour == WHITE || face.edges.size() != 3) continue;
+        std::vector<uint32_t> fv(3, UINT32_MAX);
+        list_faceVertices(faces[fi], fv);
+        std::array<uint32_t, 3> key = {fv[0], fv[1], fv[2]};
+        std::sort(key.begin(), key.end());
+        black_face[key] = fi;
+    }
+    if (black_face.empty()) return;
+
+    // Cache, per BLACK face, the coplanar group(s) it overlaps (positive-area SAT over
+    // its coplanar constraints). Usually one group; more than one only where two
+    // exactly-coplanar surfaces overlap on the same plane (all triangles overlapped by
+    // one face are on that face's single plane, but may belong to distinct groups).
+    std::vector<int> cache_done(faces.size(), 0);
+    std::vector<std::vector<uint32_t>> cache_groups(faces.size());
+
+    for (uint32_t k = 0; 4u * k < final_tets.size(); k++) {
+        const uint32_t* tet = &final_tets[4 * k];
+        for (int lf = 0; lf < 4; lf++) {
+            // Face lf is opposite local vertex lf.
+            const uint32_t a = tet[(lf + 1) & 3], b = tet[(lf + 2) & 3], c = tet[(lf + 3) & 3];
+            std::array<uint32_t, 3> key = {a, b, c};
+            std::sort(key.begin(), key.end());
+            auto it = black_face.find(key);
+            if (it == black_face.end()) continue;
+            const uint64_t fi = it->second;
+
+            if (!cache_done[fi]) {
+                cache_done[fi] = 1;
+                std::vector<uint32_t>& gs = cache_groups[fi];
+                const BSPface& face = faces[fi];
+                const int n_max = face_dominant_normal_component(face);
+                for (uint32_t constr : face.coplanar_constraints) {
+                    if (is_virtual(constr)) continue;
+                    const uint32_t cID = 3 * constr;
+                    if (coplanar_tris_overlap(
+                            *vertices[a], *vertices[b], *vertices[c],
+                            *vertices[constraints_vrts[cID]], *vertices[constraints_vrts[cID + 1]],
+                            *vertices[constraints_vrts[cID + 2]], n_max)) {
+                        const uint32_t g = constraint_coplanar_group[constr];
+                        if (std::find(gs.begin(), gs.end(), g) == gs.end()) gs.push_back(g);
+                    }
+                }
+                std::sort(gs.begin(), gs.end()); // deterministic output order
+            }
+            if (!cache_groups[fi].empty())
+                face_provenance.push_back({k, (uint8_t)lf, cache_groups[fi]});
+        }
+    }
 }
 
 
@@ -3155,7 +3333,19 @@ void BSPcomplex::saveSkin(const char* filename, const char bool_opcode, bool tri
 
 //
 //
-void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tetrahedrize)
+// Portable decimal "[-]num[/den]" of an exact rational, independent of the bignum
+// backend (gmpxx's get_str vs the in-house get_dec_str both emit base-10 num/den).
+static inline std::string rational_to_string(const bigrational& r)
+{
+#ifdef USE_GNU_GMP_CLASSES
+    return r.get_str();
+#else
+    return r.get_dec_str();
+#endif
+}
+
+void BSPcomplex::saveMesh(
+    const char* filename, const char bool_opcode, bool tetrahedrize, bool export_rational)
 {
     // Binary mode so line endings stay LF on every OS (byte-identical output).
     ofstream f(filename, std::ios::binary);
@@ -3222,6 +3412,55 @@ void BSPcomplex::saveMesh(const char* filename, const char bool_opcode, bool tet
         for (uint32_t t = 0; t < final_tets.size(); t += 4)
             f << "4 " << vmap[final_tets[t]] << " " << vmap[final_tets[t + 1]] << " "
               << vmap[final_tets[t + 2]] << " " << vmap[final_tets[t + 3]] << "\n";
+
+        // Sidecar 1: input-surface provenance of the output tet faces. One line per
+        // on-surface face: "<tet_id> <local_face> <is_group> <num_groups> <group_id>...".
+        // The face is opposite local vertex <local_face> of tet <tet_id>; it overlaps the
+        // listed coplanar group(s). <is_group> is 1 when it is NOT a 1-1 map to a single
+        // input triangle -- i.e. it overlaps more than one group, or a single group that
+        // has >= 2 triangles. Interior faces are absent.
+        {
+            ofstream pf((std::string(filename) + ".prov").c_str(), std::ios::binary);
+            pf << "# tet_id local_face is_coplanar_group num_groups group_id...\n";
+            pf << face_provenance.size() << "\n";
+            for (const FaceProvenance& p : face_provenance) {
+                const bool flag = p.groups.size() > 1 || coplanar_group_size[p.groups[0]] >= 2;
+                pf << p.tet << " " << (int)p.local_face << " " << (flag ? 1 : 0) << " "
+                   << p.groups.size();
+                for (uint32_t g : p.groups) pf << " " << g;
+                pf << "\n";
+            }
+        }
+
+        // Sidecar 2: the coplanar group of each input triangle, so the group areas can
+        // be reconstructed. "<num_constraints> <num_groups>" then, per real constraint,
+        // "<input_triangle_id> <coplanar_group_id>". input_triangle_id is the triangle's
+        // index in the INPUT file (degenerate/collinear input triangles are dropped by
+        // the mesher, so this is not simply 0..n-1 when the input has any).
+        {
+            ofstream gf((std::string(filename) + ".groups").c_str(), std::ios::binary);
+            gf << "# input_triangle_id coplanar_group_id\n";
+            gf << constraint_coplanar_group.size() << " " << coplanar_group_size.size() << "\n";
+            for (uint32_t c = 0; c < constraint_coplanar_group.size(); c++) {
+                const uint32_t off = constraint_original_index.empty() ? c : constraint_original_index[c];
+                gf << off << " " << constraint_coplanar_group[c] << "\n";
+            }
+        }
+
+        // Sidecar 2 (optional, for exact verification): the output vertex coordinates
+        // as exact rationals, same order/indexing as the .tet vertex block. Format per
+        // line: "<x> <y> <z>", each a rational "[-]num[/den]" (portable decimal).
+        if (export_rational) {
+            ofstream rf((std::string(filename) + ".rational").c_str(), std::ios::binary);
+            rf << final_numver << "\n";
+            bigrational rx, ry, rz;
+            for (uint32_t v = 0; v < vertices.size(); v++)
+                if (vrts_visit[v]) {
+                    vertices[v]->getExactXYZCoordinates(rx, ry, rz);
+                    rf << rational_to_string(rx) << " " << rational_to_string(ry) << " "
+                       << rational_to_string(rz) << "\n";
+                }
+        }
     } else {
         size_t internal_cell_num = 0;
         std::vector<uint32_t> face_visit(faces.size(), 0);
