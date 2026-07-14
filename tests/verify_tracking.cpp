@@ -14,7 +14,7 @@
 // by two tets is counted once (dedup by geometry).
 //
 // Usage: verify_tracking <input.off> <volume.tet>
-//   expects <volume.tet>.rational, <volume.tet>.prov, <volume.tet>.groups alongside.
+//   expects <volume.tet>.rational, <volume.tet>.triangleprov, <volume.tet>.groups alongside.
 
 #include <VolumeRemesher/numerics.h>
 
@@ -255,66 +255,51 @@ int main(int argc, char** argv)
             tri_2area(in_vtx[in_tri[i][0]], in_vtx[in_tri[i][1]], in_vtx[in_tri[i][2]], group_axis[g]);
     }
 
-    // provenance entries: a face and the coplanar group(s) it overlaps.
-    struct Entry
+    // Face provenance (.triangleprov), keyed by coplanar group: per group, the output tet
+    // faces tiling it, each "tet v0 v1 v2" (we use the vertices; the tet id is extra info).
+    std::vector<std::vector<std::array<uint32_t, 3>>> tri_prov(num_groups);
+    size_t total_faces = 0;
     {
-        uint32_t tet;
-        int lf, flag;
-        std::vector<uint32_t> groups;
-    };
-    std::vector<Entry> prov;
-    {
-        std::ifstream in(tet_path + ".prov");
-        if (!in) die("cannot open .prov");
+        std::ifstream in(tet_path + ".triangleprov");
+        if (!in) die("cannot open .triangleprov");
         std::string line;
-        uint32_t count;
-        if (!next_line(in, line)) die("bad .prov");
-        std::istringstream(line) >> count;
-        for (uint32_t i = 0; i < count; i++) {
-            if (!next_line(in, line)) die("truncated .prov");
+        uint32_t ng;
+        if (!next_line(in, line)) die("bad .triangleprov");
+        std::istringstream(line) >> ng;
+        for (uint32_t i = 0; i < ng; i++) {
+            if (!next_line(in, line)) die("truncated .triangleprov");
             std::istringstream ss(line);
-            Entry e;
-            uint32_t ng;
-            ss >> e.tet >> e.lf >> e.flag >> ng;
-            for (uint32_t j = 0; j < ng; j++) {
-                uint32_t g;
-                ss >> g;
-                e.groups.push_back(g);
+            uint32_t g, nf;
+            ss >> g >> nf;
+            if (g >= num_groups) die(".triangleprov references unknown group");
+            for (uint32_t j = 0; j < nf; j++) {
+                uint32_t tet, v0, v1, v2;
+                ss >> tet >> v0 >> v1 >> v2;
+                tri_prov[g].push_back({v0, v1, v2});
+                total_faces++;
             }
-            prov.push_back(e);
         }
     }
 
-    // Walk faces: check soundness + flag; accumulate (distinct) face areas per group.
-    // A face is added once per group it lists -- where two exactly-coplanar surfaces
-    // overlap, one shared face legitimately covers area in each of the two groups.
+    // Per group: check every listed face lies on the group's plane (soundness) and that the
+    // distinct faces tile it (coverage). A face shared by two overlapping coplanar surfaces
+    // is listed under each of the two groups and covers area in both.
     std::vector<bigrational> covered(num_groups, ZERO);
-    std::set<std::array<R3, 3>> seen;
-    uint64_t sound_fail = 0, flag_fail = 0;
-    for (const Entry& e : prov) {
-        const auto& t = tets.at(e.tet);
-        std::array<R3, 3> F;
-        int p = 0;
-        for (int i = 0; i < 4; i++)
-            if (i != e.lf) F[p++] = get_out(t[i]);
-
-        // flag consistency: "not a 1-1 map" == overlaps >1 group, or a single group
-        // that itself has >= 2 input triangles.
-        bool exp_flag = e.groups.size() > 1 || (e.groups.size() == 1 && group_size[e.groups[0]] >= 2);
-        if ((e.flag != 0) != exp_flag) flag_fail++;
-
-        std::array<R3, 3> key = F;
-        std::sort(key.begin(), key.end());
-        const bool first = seen.insert(key).second; // count area once per distinct face
-        for (uint32_t g : e.groups) {
-            if (g >= num_groups) die(".prov references unknown group");
-            // soundness: F lies exactly on this group's plane.
-            const auto& r = in_tri[group_rep[g]];
-            const R3 &r0 = in_vtx[r[0]], &r1 = in_vtx[r[1]], &r2 = in_vtx[r[2]];
+    uint64_t sound_fail = 0;
+    for (uint32_t g = 0; g < num_groups; g++) {
+        if (group_rep[g] < 0) continue; // group has no non-degenerate input triangle
+        const auto& r = in_tri[group_rep[g]];
+        const R3 &r0 = in_vtx[r[0]], &r1 = in_vtx[r[1]], &r2 = in_vtx[r[2]];
+        std::set<std::array<R3, 3>> seen; // count each distinct face once
+        for (const auto& f : tri_prov[g]) {
+            const std::array<R3, 3> F = {get_out(f[0]), get_out(f[1]), get_out(f[2])};
             if (orient3d(r0, r1, r2, F[0]) != ZERO || orient3d(r0, r1, r2, F[1]) != ZERO ||
                 orient3d(r0, r1, r2, F[2]) != ZERO)
                 sound_fail++;
-            if (first) covered[g] = covered[g] + tri_2area(F[0], F[1], F[2], group_axis[g]);
+            std::array<R3, 3> key = F;
+            std::sort(key.begin(), key.end());
+            if (seen.insert(key).second)
+                covered[g] = covered[g] + tri_2area(F[0], F[1], F[2], group_axis[g]);
         }
     }
 
@@ -334,11 +319,9 @@ int main(int argc, char** argv)
     }
 
     printf("verify_tracking: input_tris=%zu groups=%u output_tets=%u tagged_faces=%zu\n",
-        in_tri.size(), num_groups, out_nt, prov.size());
+        in_tri.size(), num_groups, out_nt, total_faces);
     printf("  soundness (face lies exactly on its group's plane): %s (%llu bad)\n",
         sound_fail ? "FAIL" : "ok", (unsigned long long)sound_fail);
-    printf("  flag      (is_coplanar_group is consistent):        %s (%llu bad)\n",
-        flag_fail ? "FAIL" : "ok", (unsigned long long)flag_fail);
 
     // The area-coverage check is EXACT and must hold when the input's coplanar groups
     // are *exactly* coplanar (e.g. the cube models): then the mesher reproduces each
@@ -407,8 +390,8 @@ int main(int argc, char** argv)
                 ss >> eid >> m;
                 std::vector<std::array<uint32_t, 2>> es;
                 for (uint32_t j = 0; j < m; j++) {
-                    uint32_t a, b;
-                    ss >> a >> b;
+                    uint32_t tet, a, b; // each output edge is "tet v0 v1"; the tet id is extra
+                    ss >> tet >> a >> b;
                     es.push_back({a, b});
                 }
                 if (eid < eprov.size()) eprov[eid] = es;
@@ -493,8 +476,8 @@ int main(int argc, char** argv)
             for (uint32_t i = 0; i < n; i++) {
                 if (!next_line(in, line)) die("truncated .pointprov");
                 uint32_t pid;
-                long long out;
-                std::istringstream(line) >> pid >> out;
+                long long tet, out; // "point_id tet out_vertex"; the tet id is extra
+                std::istringstream(line) >> pid >> tet >> out;
                 if (pid < pprov.size()) pprov[pid] = out;
             }
         }
@@ -520,7 +503,7 @@ int main(int argc, char** argv)
         printf("  points    (each input point == an output vertex):      %s (%llu bad of %zu)\n",
             point_fail ? "FAIL" : "ok", (unsigned long long)point_fail, n_in_points);
 
-    bool ok = !sound_fail && !flag_fail && !edge_fail && !point_fail && (!strict || coverage_ok);
+    bool ok = !sound_fail && !edge_fail && !point_fail && (!strict || coverage_ok);
     printf("%s\n", ok ? "TRACKING OK" : "TRACKING FAILED");
     return ok ? 0 : 1;
 }

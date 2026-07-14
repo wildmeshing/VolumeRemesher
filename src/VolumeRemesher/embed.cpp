@@ -19,8 +19,9 @@ void embed_tri_in_poly_mesh(
     const std::vector<double>& edge_vrt_coords,
     const std::vector<uint32_t>& edge_indexes,
     const std::vector<double>& point_coords,
-    std::vector<std::vector<std::array<uint32_t, 2>>>& out_edge_provenance,
-    std::vector<uint32_t>& out_point_provenance,
+    std::vector<std::vector<std::array<uint32_t, 4>>>& out_triangle_provenance,
+    std::vector<std::vector<std::array<uint32_t, 3>>>& out_edge_provenance,
+    std::vector<std::array<uint32_t, 2>>& out_point_provenance,
     bool verbose)
 {
     // Optional extra edges/points to force into the embedding.
@@ -151,15 +152,17 @@ void embed_tri_in_poly_mesh(
         }
     }
 
-    // Provenance of the inserted edges/points. The indices are into 'vertices'/'out_tets'
-    // (this path emits every complex vertex, so no remapping is needed).
+    // Surface / edge / point provenance. All indices are into 'out_tets'/'vertices' (this
+    // path emits every complex vertex and tet in order, so no remapping is needed).
+    out_triangle_provenance = complex->triangle_provenance; // per coplanar group: {tet,v0,v1,v2}
     out_edge_provenance.assign(complex->edge_provenance.size(), {});
     for (const auto& ep : complex->edge_provenance)
         if (ep.edge_id < out_edge_provenance.size()) out_edge_provenance[ep.edge_id] = ep.out_edges;
-    out_point_provenance.assign(complex->point_provenance.size(), UINT32_MAX);
+    out_point_provenance.assign(
+        complex->point_provenance.size(), {UINT32_MAX, UINT32_MAX});
     for (const auto& pp : complex->point_provenance)
         if (pp.point_id < out_point_provenance.size())
-            out_point_provenance[pp.point_id] = pp.out_vertex;
+            out_point_provenance[pp.point_id] = {pp.tet, pp.out_vertex};
 
     if (verbose) printf("Done\n");
 }

@@ -235,31 +235,27 @@ public:
     std::vector<uint32_t> constraint_coplanar_group;
     std::vector<uint32_t> coplanar_group_size;
 
-    // Input-surface provenance of the output tet faces (interior faces carry no tag).
-    // Filled by trackFaceProvenance() during makeTetrahedra. Face `local_face` of tet
-    // `tet` is the triangle opposite that tet's local vertex `local_face`. It is
-    // reported by the coplanar GROUP(s) it overlaps: normally one, but more than one
-    // where two exactly-coplanar surfaces overlap on the same plane (e.g. a small cube
-    // resting on a larger one -- the shared face lies on both objects' groups).
-    struct FaceProvenance
-    {
-        uint32_t tet;
-        uint8_t local_face; // 0..3
-        std::vector<uint32_t> groups; // coplanar groups the face overlaps
-    };
-    std::vector<FaceProvenance> face_provenance;
+    // Input-surface provenance, keyed by coplanar group (see computeCoplanarGroups) so it is
+    // symmetric with edge_provenance/point_provenance: triangle_provenance[g] lists the output
+    // tet faces tiling group g, each as {tet_id, v0, v1, v2} -- an output tet index plus the
+    // three output vertices (vertices[] ids) of that tet's face. A face on two overlapping
+    // coplanar surfaces is listed under both their groups. Filled by trackFaceProvenance.
+    std::vector<std::vector<std::array<uint32_t, 4>>> triangle_provenance;
 
     // Provenance of inserted edges/points (see insert_edges_and_points +
     // trackEdgePointProvenance). Filled during makeTetrahedra.
     struct EdgeProvenance
     {
         uint32_t edge_id;
-        std::vector<std::array<uint32_t, 2>> out_edges; // output tet edges (vertices[] ids) on it
+        // output tet edges on it, each as {tet_id, v0, v1}: an output tet index plus the two
+        // output vertices (vertices[] ids) of that tet's edge.
+        std::vector<std::array<uint32_t, 3>> out_edges;
     };
     std::vector<EdgeProvenance> edge_provenance;
     struct PointProvenance
     {
         uint32_t point_id;
+        uint32_t tet; // an output tet containing out_vertex (UINT32_MAX if absent)
         uint32_t out_vertex; // vertices[] id of the output vertex equal to it (UINT32_MAX if absent)
     };
     std::vector<PointProvenance> point_provenance;
@@ -468,8 +464,8 @@ public:
     // from makeTetrahedra after the tets are built.
     void trackEdgePointProvenance();
 
-    // Fills face_provenance: for each output tet face lying on the input surface,
-    // the coplanar group it belongs to. Called from makeTetrahedra.
+    // Fills triangle_provenance: for each coplanar group, the output tet faces tiling it.
+    // Called from makeTetrahedra.
     void trackFaceProvenance();
 };
 

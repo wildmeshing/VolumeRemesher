@@ -2870,8 +2870,9 @@ void BSPcomplex::computeCoplanarGroups()
 
 void BSPcomplex::trackFaceProvenance()
 {
-    face_provenance.clear();
     computeCoplanarGroups();
+    // One list of output faces per coplanar group (symmetric with edge/point provenance).
+    triangle_provenance.assign(coplanar_group_size.size(), {});
 
     // Index every BLACK (on-surface) triangular face by its sorted vertex triple, so a
     // tet face can be matched to the BSP face it came from by exact integer identity.
@@ -2893,6 +2894,9 @@ void BSPcomplex::trackFaceProvenance()
     // one face are on that face's single plane, but may belong to distinct groups).
     std::vector<int> cache_done(faces.size(), 0);
     std::vector<std::vector<uint32_t>> cache_groups(faces.size());
+    // Per group: the distinct output faces already recorded (a surface face borders two kept
+    // cells, so it is met from two tets; list it once).
+    std::vector<std::set<std::array<uint32_t, 3>>> seen(coplanar_group_size.size());
 
     for (uint32_t k = 0; 4u * k < final_tets.size(); k++) {
         const uint32_t* tet = &final_tets[4 * k];
@@ -2926,8 +2930,12 @@ void BSPcomplex::trackFaceProvenance()
                 }
                 std::sort(gs.begin(), gs.end()); // deterministic output order
             }
-            if (!cache_groups[fi].empty())
-                face_provenance.push_back({k, (uint8_t)lf, cache_groups[fi]});
+            // Record this output face (tet k + its three vertices) under every group it
+            // tiles, deduped by geometry (a surface face is met from its two adjacent tets;
+            // keep one representative tet).
+            for (uint32_t g : cache_groups[fi])
+                if (seen[g].insert(key).second)
+                    triangle_provenance[g].push_back({k, a, b, c});
         }
     }
 }
@@ -2940,17 +2948,21 @@ void BSPcomplex::trackEdgePointProvenance()
     const uint32_t n_points = num_point_triangles / 3;
     if (n_edges == 0 && n_points == 0) return;
 
-    // Which vertices are used by the output tets, and the set of output tet edges.
+    // Which vertices are used by the output tets, and, for each output tet edge, one tet
+    // that contains it (so an edge can be reported as {tet_id, v0, v1}).
     std::vector<char> used(vertices.size(), 0);
     for (uint32_t v : final_tets) used[v] = 1;
-    std::set<std::pair<uint32_t, uint32_t>> tet_edges;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> tet_edges; // sorted pair -> a tet id
+    std::vector<uint32_t> vertex_to_tet(vertices.size(), UINT32_MAX); // a tet containing v
     static const int E[6][2] = {{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}};
     for (uint32_t k = 0; 4u * k < final_tets.size(); k++) {
         const uint32_t* tet = &final_tets[4 * k];
+        for (int i = 0; i < 4; i++)
+            if (vertex_to_tet[tet[i]] == UINT32_MAX) vertex_to_tet[tet[i]] = k;
         for (auto& ee : E) {
             uint32_t a = tet[ee[0]], b = tet[ee[1]];
             if (a > b) std::swap(a, b);
-            tet_edges.insert({a, b});
+            tet_edges.emplace(std::make_pair(a, b), k); // keep the first tet seen
         }
     }
 
@@ -3037,11 +3049,12 @@ void BSPcomplex::trackEdgePointProvenance()
             std::sort(on.begin(), on.end(), [&](uint32_t x, uint32_t y) {
                 return genericPoint::lessThan(*vertices[x], *vertices[y]) < 0;
             });
-            std::vector<std::array<uint32_t, 2>> segs;
+            std::vector<std::array<uint32_t, 3>> segs; // {tet_id, v0, v1}
             for (size_t i = 0; i + 1 < on.size(); i++) {
                 uint32_t a = on[i], b = on[i + 1];
                 uint32_t lo = a < b ? a : b, hi = a < b ? b : a;
-                if (tet_edges.count({lo, hi})) segs.push_back({a, b});
+                auto it = tet_edges.find({lo, hi});
+                if (it != tet_edges.end()) segs.push_back({it->second, a, b});
             }
             edge_provenance.push_back({e, segs});
         }
@@ -3062,7 +3075,8 @@ void BSPcomplex::trackEdgePointProvenance()
                     out = v;
                     break;
                 }
-        point_provenance.push_back({p, out});
+        const uint32_t tet = (out == UINT32_MAX) ? UINT32_MAX : vertex_to_tet[out];
+        point_provenance.push_back({p, tet, out});
     }
 }
 
@@ -3568,21 +3582,20 @@ void BSPcomplex::saveMesh(
             f << "4 " << vmap[final_tets[t]] << " " << vmap[final_tets[t + 1]] << " "
               << vmap[final_tets[t + 2]] << " " << vmap[final_tets[t + 3]] << "\n";
 
-        // Sidecar 1: input-surface provenance of the output tet faces. One line per
-        // on-surface face: "<tet_id> <local_face> <is_group> <num_groups> <group_id>...".
-        // The face is opposite local vertex <local_face> of tet <tet_id>; it overlaps the
-        // listed coplanar group(s). <is_group> is 1 when it is NOT a 1-1 map to a single
-        // input triangle -- i.e. it overlaps more than one group, or a single group that
-        // has >= 2 triangles. Interior faces are absent.
+        // Sidecar 1: input-surface provenance, keyed by coplanar group (symmetric with the
+        // edge/point sidecars below). One line per group listing the output tet faces tiling
+        // it: "<group_id> <num_faces> <tet v0 v1 v2> <tet v0 v1 v2> ...", where tet is the
+        // output tet index (0-based, matching the tet block above) and v0 v1 v2 are its
+        // face's output vertex indices. (A face on two overlapping coplanar surfaces is
+        // listed under both groups; group sizes are in the .groups sidecar.)
         {
-            ofstream pf((std::string(filename) + ".prov").c_str(), std::ios::binary);
-            pf << "# tet_id local_face is_coplanar_group num_groups group_id...\n";
-            pf << face_provenance.size() << "\n";
-            for (const FaceProvenance& p : face_provenance) {
-                const bool flag = p.groups.size() > 1 || coplanar_group_size[p.groups[0]] >= 2;
-                pf << p.tet << " " << (int)p.local_face << " " << (flag ? 1 : 0) << " "
-                   << p.groups.size();
-                for (uint32_t g : p.groups) pf << " " << g;
+            ofstream pf((std::string(filename) + ".triangleprov").c_str(), std::ios::binary);
+            pf << "# group_id num_faces tet v0 v1 v2 ...\n";
+            pf << triangle_provenance.size() << "\n";
+            for (uint32_t g = 0; g < triangle_provenance.size(); g++) {
+                pf << g << " " << triangle_provenance[g].size();
+                for (const auto& f : triangle_provenance[g])
+                    pf << " " << f[0] << " " << vmap[f[1]] << " " << vmap[f[2]] << " " << vmap[f[3]];
                 pf << "\n";
             }
         }
@@ -3603,32 +3616,34 @@ void BSPcomplex::saveMesh(
         }
 
         // Sidecar 3: provenance of inserted edges. One line per input edge:
-        // "<edge_id> <num_out_edges> <v0 v1> <v0 v1> ...", where each v is an output
-        // vertex index (same compact indexing as the .tet vertex block). The listed
-        // output tet edges tile the input segment.
+        // "<edge_id> <num_out_edges> <tet v0 v1> <tet v0 v1> ...", where tet is the output
+        // tet index and v0 v1 are its edge's output vertex indices (matching the .tet block).
+        // The listed output tet edges tile the input segment.
         if (!edge_provenance.empty()) {
             ofstream ef((std::string(filename) + ".edgeprov").c_str(), std::ios::binary);
-            ef << "# edge_id num_out_edges v0 v1 ...\n";
+            ef << "# edge_id num_out_edges tet v0 v1 ...\n";
             ef << edge_provenance.size() << "\n";
             for (const EdgeProvenance& ep : edge_provenance) {
                 ef << ep.edge_id << " " << ep.out_edges.size();
-                for (const auto& oe : ep.out_edges) ef << " " << vmap[oe[0]] << " " << vmap[oe[1]];
+                for (const auto& oe : ep.out_edges)
+                    ef << " " << oe[0] << " " << vmap[oe[1]] << " " << vmap[oe[2]];
                 ef << "\n";
             }
         }
 
         // Sidecar 4: provenance of inserted points. One line per input point:
-        // "<point_id> <out_vertex>" (output vertex index, or -1 if the point did not
-        // survive into the output).
+        // "<point_id> <tet> <out_vertex>", where out_vertex is the output vertex equal to the
+        // point and tet is an output tet containing it (both -1 if the point did not survive).
         if (!point_provenance.empty()) {
             ofstream pf((std::string(filename) + ".pointprov").c_str(), std::ios::binary);
-            pf << "# point_id out_vertex(-1 if absent)\n";
+            pf << "# point_id tet out_vertex(-1 -1 if absent)\n";
             pf << point_provenance.size() << "\n";
-            for (const PointProvenance& pp : point_provenance)
-                pf << pp.point_id << " "
-                   << (pp.out_vertex == UINT32_MAX ? std::string("-1")
-                                                   : std::to_string(vmap[pp.out_vertex]))
-                   << "\n";
+            for (const PointProvenance& pp : point_provenance) {
+                if (pp.out_vertex == UINT32_MAX)
+                    pf << pp.point_id << " -1 -1\n";
+                else
+                    pf << pp.point_id << " " << pp.tet << " " << vmap[pp.out_vertex] << "\n";
+            }
         }
 
         // Sidecar 2 (optional, for exact verification): the output vertex coordinates

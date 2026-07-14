@@ -61,10 +61,10 @@ The three inputs — the surface `inputfile_A.off`, the `-e` edges and the `-p` 
 | `skin.off` | `-s` | Bounding surface. |
 | `black_faces.off` | `-b` | Subdivided input constraints. |
 | `volume.tet.rational` | `-t -r` | Exact rational coordinates, same order/indexing as the `volume.tet` vertex block. |
-| `volume.tet.prov` | `-t` | Face provenance (output faces &rarr; input triangles). |
 | `volume.tet.groups` | `-t` | Coplanar grouping of the input triangles. |
-| `volume.tet.edgeprov` | `-t -e` | Edge provenance (output tet edges &rarr; input edges). |
-| `volume.tet.pointprov` | `-t -p` | Point provenance (output vertex &rarr; input point). |
+| `volume.tet.triangleprov` | `-t` | Triangle (face) provenance: per input coplanar group, the output faces tiling it. |
+| `volume.tet.edgeprov` | `-t -e` | Edge provenance: per input edge, the output tet edges tiling it. |
+| `volume.tet.pointprov` | `-t -p` | Point provenance: per input point, the equal output vertex. |
 
 ## Inserting edges and points
 
@@ -83,7 +83,7 @@ mesh_generator -t -r -a -p models/cube_subdiv_points.off
 
 ## Tracking output back to the input
 
-With `-t` the mesher writes sidecar files that map output elements back to the input. Use `-a` so the tracking is **exact** (every input primitive is realized). Coordinates in the sidecars refer to `volume.tet`'s 0-based vertex/tet indices; `volume.tet.rational` gives the exact coordinates of each output vertex in the same order.
+With `-t` the mesher writes sidecar files that map each input primitive to the output primitives it becomes. Use `-a` so the tracking is **exact** (every input primitive is realized). The three provenance sidecars share the **same shape** — keyed by the input primitive (coplanar triangle group / edge / point), each output primitive is given as an **output tet index plus that tet's vertex indices** (a face is `tet v0 v1 v2`, an edge is `tet v0 v1`, a point is `tet vertex`). All indices are 0-based into `volume.tet`'s tet and vertex blocks; `volume.tet.rational` gives the exact coordinates of each output vertex in the same order.
 
 ### `volume.tet.groups` — coplanar groups of the input triangles
 
@@ -94,37 +94,37 @@ The input triangles are partitioned into maximal **edge-connected, exactly-copla
 <input_triangle_id> <coplanar_group_id>
 ...
 ```
-`input_triangle_id` is the triangle's index in the **input OFF file** (degenerate/collinear input triangles are dropped by the mesher, so this is not simply `0..n-1`).
+`input_triangle_id` is the triangle's index in the **input OFF file** (degenerate/collinear input triangles are dropped by the mesher, so this is not simply `0..n-1`). A group is a 1-to-1 map to a single input triangle iff it has exactly one triangle.
 
-### `volume.tet.prov` — face provenance (faces &rarr; input triangles)
+### `volume.tet.triangleprov` — triangle (face) provenance
 
-One line per output tet face that lies on the input surface:
+One line per coplanar group, listing the output tet faces that tile it:
 ```
-# tet_id local_face is_coplanar_group num_groups group_id...
-<num_tagged_faces>
-<tet_id> <local_face> <is_coplanar_group> <num_groups> <group_id> ...
+# group_id num_faces tet v0 v1 v2 ...
+<num_groups>
+<group_id> <num_faces> <tet v0 v1 v2> <tet v0 v1 v2> ...
 ```
-The face is the one **opposite** local vertex `local_face` (0..3) of tet `tet_id`. It is reported by the coplanar `group_id`(s) it overlaps — normally one, but more than one where two exactly-coplanar surfaces overlap on the same plane. `is_coplanar_group` is `1` when the face is **not** a 1-to-1 map to a single input triangle (it overlaps more than one group, or a group that itself has ≥2 triangles), and `0` otherwise. Interior faces (not on the surface) are absent. To get a group's area back, sum the areas of the distinct faces tagged with it.
+Each face is given as an output tet index `tet` and the three output vertex indices `v0 v1 v2` of that tet's face (`v0 v1 v2` are three of tet `tet`'s four vertices). A face on two exactly-coplanar surfaces that overlap on the same plane is listed under both groups. Summing the (distinct) face areas of a group reconstructs the group's area.
 
-### `volume.tet.edgeprov` — edge provenance (edges &rarr; input edges)
+### `volume.tet.edgeprov` — edge provenance
 
-One line per input edge, listing the output tet edges lying on it (they tile the input segment exactly):
+One line per input edge, listing the output tet edges that tile it (their union is exactly the input segment):
 ```
-# edge_id num_out_edges v0 v1 ...
+# edge_id num_out_edges tet v0 v1 ...
 <num_input_edges>
-<edge_id> <num_out_edges> <v0 v1> <v0 v1> ...
+<edge_id> <num_out_edges> <tet v0 v1> <tet v0 v1> ...
 ```
-`edge_id` is the input edge's index in the `-e` file; each `v0 v1` is an output tet edge (0-based `volume.tet` vertex indices).
+`edge_id` is the input edge's index in the `-e` file; each output edge is a tet index `tet` and the two output vertex indices `v0 v1` of that tet's edge.
 
-### `volume.tet.pointprov` — point provenance (point &rarr; output vertex)
+### `volume.tet.pointprov` — point provenance
 
 One line per input point:
 ```
-# point_id out_vertex(-1 if absent)
+# point_id tet out_vertex(-1 -1 if absent)
 <num_input_points>
-<point_id> <out_vertex>
+<point_id> <tet> <out_vertex>
 ```
-`out_vertex` is the 0-based `volume.tet` vertex index equal to the input point (`-1` if it did not survive into the output — should not happen with `-a`).
+`out_vertex` is the output vertex equal to the input point and `tet` an output tet containing it (both `-1` if the point did not survive into the output — should not happen with `-a`).
 
 ### Independent verifier
 
