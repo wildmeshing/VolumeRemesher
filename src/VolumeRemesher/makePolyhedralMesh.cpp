@@ -1,5 +1,8 @@
 #include <stdarg.h>
 #include <time.h>
+#include <cassert>
+#include <cfloat>
+#include <cstdio>
 #include "BSP.h"
 #include "conforming_mesh.h"
 #include "extended_predicates.h"
@@ -380,8 +383,13 @@ BSPcomplex* makePolyhedralMesh(
     bool verbose,
     bool logging,
     bool fill_holes,
-    bool keep_all_cells)
+    bool keep_all_cells,
+    const extra_features_t* extra)
 {
+    // Inserted edges/points only survive if we keep every cell (the min-cut would
+    // otherwise delete the cells they bound), so they imply keep_all_cells.
+    const bool has_extra = extra && (extra->n_edges > 0 || extra->n_points > 0);
+    if (has_extra) keep_all_cells = true;
     // saveVRML("input1.wrl", coords_A, npts_A, tri_idx_A, ntri_A, false);
     // saveVRML("input2.wrl", coords_A, npts_A, tri_idx_A, ntri_A, true);
 
@@ -410,22 +418,36 @@ BSPcomplex* makePolyhedralMesh(
     constraints_t* constraints = new constraints_t;
 
     if (!two_input) {
-        read_nodes_and_constraints(
-            coords_A,
-            npts_A,
-            tri_idx_A,
-            ntri_A,
-            &mesh->vertices,
-            &mesh->num_vertices,
-            &constraints->tri_vertices,
-            &constraints->num_triangles,
-            &constraints->tri_original_index,
-            verbose);
+        if (npts_A > 0) {
+            read_nodes_and_constraints(
+                coords_A,
+                npts_A,
+                tri_idx_A,
+                ntri_A,
+                &mesh->vertices,
+                &mesh->num_vertices,
+                &constraints->tri_vertices,
+                &constraints->num_triangles,
+                &constraints->tri_original_index,
+                verbose);
+        } else {
+            // No triangle input: start with an empty surface. The edges/points inserted
+            // below supply all vertices and constraints. (This is what makes the triangle
+            // input optional -- only edges, only points, or any combination is valid.)
+            mesh->vertices = NULL;
+            mesh->num_vertices = 0;
+            constraints->tri_vertices = NULL;
+            constraints->num_triangles = 0;
+            constraints->tri_original_index = NULL;
+        }
         // Cap open boundaries so that every input triangle bounds a closed volume
         // (see fill_holes_in_constraints). The cap triangles are excluded from the
         // surface tracking. Must run before the Delaunay permutation and virtual
         // constraints below, so the caps are remapped/handled just like real input.
         if (fill_holes) fill_holes_in_constraints(constraints, mesh, verbose);
+        // Force extra edges/points into the output (appended after the caps). Same
+        // timing requirement: before the Delaunay permutation and virtual constraints.
+        if (has_extra) insert_edges_and_points(constraints, mesh, *extra, verbose);
         constraints->constr_group = (uint32_t*)calloc(constraints->num_triangles, sizeof(uint32_t));
     } else { // two input
         read_nodes_and_constraints_twoInput(
@@ -718,7 +740,8 @@ BSPcomplex* remakePolyhedralMesh(
     const uint32_t* tet_idx_B,
     uint32_t ntet_B,
     bool verbose,
-    bool no_class)
+    bool no_class,
+    const extra_features_t* extra)
 {
     if (verbose) printf("\nEmbed trimesh into tetmesh.\n\n");
 
@@ -728,20 +751,26 @@ BSPcomplex* remakePolyhedralMesh(
     vertex_t* vertices;
     uint32_t num_vertices;
 
-    read_nodes_and_constraints(
-        coords_A,
-        npts_A,
-        tri_idx_A,
-        ntri_A,
-        &vertices,
-        &num_vertices,
-        &constraints->tri_vertices,
-        &constraints->num_triangles,
-        &constraints->tri_original_index,
-        verbose);
-    constraints->constr_group = (uint32_t*)calloc(constraints->num_triangles, sizeof(uint32_t));
-
-    if (constraints->num_triangles < 1) ip_error("No non-degenerate constraints loaded.");
+    vertices = NULL;
+    num_vertices = 0;
+    if (npts_A > 0) {
+        read_nodes_and_constraints(
+            coords_A,
+            npts_A,
+            tri_idx_A,
+            ntri_A,
+            &vertices,
+            &num_vertices,
+            &constraints->tri_vertices,
+            &constraints->num_triangles,
+            &constraints->tri_original_index,
+            verbose);
+    } else {
+        // No surface: the extra edges/points supply all constraints (optional surface).
+        constraints->tri_vertices = NULL;
+        constraints->num_triangles = 0;
+        constraints->tri_original_index = NULL;
+    }
 
     TetMesh* mesh = new TetMesh;
     mesh->init(coords_B, npts_B, tet_idx_B, ntet_B);
@@ -755,8 +784,49 @@ BSPcomplex* remakePolyhedralMesh(
 
     mesh->num_vertices += num_vertices;
     mesh->vertices = (vertex_t*)realloc(mesh->vertices, mesh->num_vertices * sizeof(vertex_t));
-    std::memcpy(mesh->vertices + orig_numv, vertices, num_vertices * sizeof(vertex_t));
-    free(vertices);
+    if (num_vertices > 0) std::memcpy(mesh->vertices + orig_numv, vertices, num_vertices * sizeof(vertex_t));
+    if (vertices) free(vertices);
+
+    // Force extra edges/points into the embedding: their vertices are appended here so
+    // the insertExistingVerticesNonDelaunay call below inserts them along with the
+    // surface, and their forcing triangles ride through the rest of the pipeline as
+    // ordinary (non-surface) constraints. They must lie inside the tet mesh domain.
+    const bool has_extra_embed = extra && (extra->n_edges > 0 || extra->n_points > 0);
+    if (has_extra_embed) insert_edges_and_points(constraints, mesh, *extra, verbose);
+
+#ifndef NDEBUG
+    // Debug guard: inserted edge/point vertices -- and their forcing-triangle apexes, which
+    // are offset by the edge length (edges) or the average edge length (points) -- must lie
+    // inside the tet mesh M. Otherwise the non-Delaunay insertion below cannot locate them
+    // and crashes. This bounding-box test is a necessary condition (exact for a convex M)
+    // and turns the common "apex outside M" mistake into a clear assertion.
+    if (has_extra_embed) {
+        double lo[3] = {DBL_MAX, DBL_MAX, DBL_MAX}, hi[3] = {-DBL_MAX, -DBL_MAX, -DBL_MAX};
+        for (uint32_t v = 0; v < orig_numv; v++)
+            for (int k = 0; k < 3; k++) {
+                const double c = mesh->vertices[v].coord[k];
+                if (c < lo[k]) lo[k] = c;
+                if (c > hi[k]) hi[k] = c;
+            }
+        for (uint32_t v = orig_numv; v < mesh->num_vertices; v++)
+            for (int k = 0; k < 3; k++) {
+                const double c = mesh->vertices[v].coord[k];
+                if (c < lo[k] || c > hi[k]) {
+                    fprintf(
+                        stderr,
+                        "remakePolyhedralMesh: an inserted edge/point vertex or forcing-triangle "
+                        "apex lies outside the tet mesh's bounding box. Edges/points and their "
+                        "apexes (offset by the edge length / average edge length) must be inside "
+                        "the embedding tet mesh.\n");
+                    assert(false && "inserted edge/point or apex is outside the tet mesh domain");
+                }
+            }
+    }
+#endif
+
+    // Allocate constr_group after all constraints exist (surface + edge/point forcing).
+    constraints->constr_group = (uint32_t*)calloc(constraints->num_triangles, sizeof(uint32_t));
+    if (constraints->num_triangles < 1) ip_error("No constraints loaded (surface/edges/points).");
 
     // Insert constraint vertices into mesh
     for (uint32_t i = 0; i < mesh->num_vertices; i++) mesh->vertices[i].original_index = i;

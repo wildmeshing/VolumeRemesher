@@ -16,8 +16,23 @@ void embed_tri_in_poly_mesh(
     std::vector<uint32_t>& facets_on_input,
     std::vector<bool>& cells_with_faces_on_input,
     std::vector<std::vector<uint32_t>>& final_tets_parent_faces,
+    const std::vector<double>& edge_vrt_coords,
+    const std::vector<uint32_t>& edge_indexes,
+    const std::vector<double>& point_coords,
+    std::vector<std::vector<std::array<uint32_t, 2>>>& out_edge_provenance,
+    std::vector<uint32_t>& out_point_provenance,
     bool verbose)
 {
+    // Optional extra edges/points to force into the embedding.
+    extra_features_t extra;
+    extra.edge_verts = edge_vrt_coords.data();
+    extra.n_edge_verts = (uint32_t)(edge_vrt_coords.size() / 3);
+    extra.edge_idx = edge_indexes.data();
+    extra.n_edges = (uint32_t)(edge_indexes.size() / 2);
+    extra.point_verts = point_coords.data();
+    extra.n_points = (uint32_t)(point_coords.size() / 3);
+    const bool has_extra = extra.n_edges > 0 || extra.n_points > 0;
+
     // Make a conformal polyhedralization
     BSPcomplex* complex = remakePolyhedralMesh(
         tri_vrt_coords.data(),
@@ -29,7 +44,8 @@ void embed_tri_in_poly_mesh(
         tet_indexes.data(),
         (uint32_t)tet_indexes.size() / 4,
         verbose,
-        true);
+        true,
+        has_extra ? &extra : nullptr);
 
     // Triangulate every (convex) BSP face so the output facets are all triangles,
     // then tetrahedralize the whole complex. keep_all_cells=true is essential
@@ -134,6 +150,16 @@ void embed_tri_in_poly_mesh(
             if (subset) final_tets_parent_faces[t_id].push_back((uint32_t)f_id);
         }
     }
+
+    // Provenance of the inserted edges/points. The indices are into 'vertices'/'out_tets'
+    // (this path emits every complex vertex, so no remapping is needed).
+    out_edge_provenance.assign(complex->edge_provenance.size(), {});
+    for (const auto& ep : complex->edge_provenance)
+        if (ep.edge_id < out_edge_provenance.size()) out_edge_provenance[ep.edge_id] = ep.out_edges;
+    out_point_provenance.assign(complex->point_provenance.size(), UINT32_MAX);
+    for (const auto& pp : complex->point_provenance)
+        if (pp.point_id < out_point_provenance.size())
+            out_point_provenance[pp.point_id] = pp.out_vertex;
 
     if (verbose) printf("Done\n");
 }

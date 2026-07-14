@@ -202,11 +202,19 @@ public:
     // constraints_vrts.size()/3 .
     std::vector<CONSTR_GROUP_T> constraint_group;
     uint32_t first_virtual_constraint;
-    // Constraints in [first_fake_constraint, first_virtual_constraint) are hole-cap
-    // ("fake") triangles inserted to close open boundaries; they bound the volume but
-    // carry no input provenance and are excluded from the surface tracking. Equals
-    // first_virtual_constraint when no holes were filled.
+    // Constraint layout (all indices are into constraints_vrts / 3):
+    //   [0, first_fake_constraint)          genuine input surface triangles
+    //   [first_fake_constraint, first_edge_constraint)   hole-cap ("fake") triangles
+    //   [first_edge_constraint, first_point_constraint)  edge-forcing triangles (2/edge)
+    //   [first_point_constraint, first_virtual_constraint) point-forcing triangles (3/pt)
+    //   [first_virtual_constraint, end)      virtual (bounding-box) constraints
+    // Caps/edge/point/virtual constraints carry no surface provenance and are excluded
+    // from the surface tracking. When a category is empty its two bounds coincide.
     uint32_t first_fake_constraint;
+    uint32_t first_edge_constraint;
+    uint32_t first_point_constraint;
+    uint32_t num_edge_triangles; // 2 per inserted edge
+    uint32_t num_point_triangles; // 3 per inserted point
     // Per real constraint: its triangle index in the input file (before degenerate
     // triangles were dropped). Empty if the input did not provide it.
     std::vector<uint32_t> constraint_original_index;
@@ -240,6 +248,21 @@ public:
         std::vector<uint32_t> groups; // coplanar groups the face overlaps
     };
     std::vector<FaceProvenance> face_provenance;
+
+    // Provenance of inserted edges/points (see insert_edges_and_points +
+    // trackEdgePointProvenance). Filled during makeTetrahedra.
+    struct EdgeProvenance
+    {
+        uint32_t edge_id;
+        std::vector<std::array<uint32_t, 2>> out_edges; // output tet edges (vertices[] ids) on it
+    };
+    std::vector<EdgeProvenance> edge_provenance;
+    struct PointProvenance
+    {
+        uint32_t point_id;
+        uint32_t out_vertex; // vertices[] id of the output vertex equal to it (UINT32_MAX if absent)
+    };
+    std::vector<PointProvenance> point_provenance;
 
 
     // Supporting vectors
@@ -440,6 +463,11 @@ public:
     // Partitions the input constraints into edge-connected coplanar groups.
     void computeCoplanarGroups();
 
+    // Fills edge_provenance / point_provenance: for each inserted edge, the output tet
+    // edges lying on it; for each inserted point, the output vertex equal to it. Called
+    // from makeTetrahedra after the tets are built.
+    void trackEdgePointProvenance();
+
     // Fills face_provenance: for each output tet face lying on the input surface,
     // the coplanar group it belongs to. Called from makeTetrahedra.
     void trackFaceProvenance();
@@ -488,7 +516,10 @@ BSPcomplex* makePolyhedralMesh(
     // the in/out min-cut classification (mark every cell internal). This makes the
     // BLACK-face surface tracking exact -- see makePolyhedralMesh. Intended for the
     // single-input tracking path (bool_opcode == '0').
-    bool keep_all_cells = false);
+    bool keep_all_cells = false,
+    // Optional extra edges/points to force into the output (see insert_edges_and_points).
+    // When present, keep_all_cells is implied so they survive into the tetrahedralization.
+    const extra_features_t* extra = nullptr);
 
 /// <summary>
 /// Same as above, but file B represents a tetrahedral mesh where A will be embedded
@@ -513,7 +544,9 @@ BSPcomplex* remakePolyhedralMesh(
     const uint32_t* tet_idx_B,
     uint32_t ntet_B,
     bool verbose,
-    bool no_class = false);
+    bool no_class = false,
+    // Optional extra edges/points to force into the embedding (see insert_edges_and_points).
+    const extra_features_t* extra = nullptr);
 } // namespace vol_rem
 
 #endif /* BSP_h */

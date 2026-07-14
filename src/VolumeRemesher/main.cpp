@@ -87,6 +87,74 @@ void read_OFF_file(
     fclose(file);
 }
 
+// Read an OFF-style edge file: "OFF", then "nv ne 0", nv vertex lines "x y z", then
+// ne edge lines "2 i j" (like an OFF face record but with two vertex indices).
+void read_edge_OFF(
+    const char* filename,
+    double** vertices_p,
+    uint32_t* npts,
+    uint32_t** edge_idx_p,
+    uint32_t* nedges,
+    bool verbose)
+{
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) ip_error("read_edge_OFF: FATAL ERROR cannot open edge file.\n");
+
+    char ext[3];
+    const char target[] = {'O', 'F', 'F'};
+    if (fscanf(file, "%3c", ext) == 0) ip_error("read_edge_OFF: cannot read 1st line\n");
+    for (uint32_t i = 0; i < 3; i++)
+        if (ext[i] != target[i]) ip_error("read_edge_OFF: 1st line is not OFF\n");
+
+    off_skip_comments(file);
+    uint32_t dummy = 0;
+    if (fscanf(file, " %u %u %u ", npts, nedges, &dummy) < 2)
+        ip_error("read_edge_OFF: cannot read vertex/edge counts\n");
+    if (verbose) printf("edge file %s: %u vertices, %u edges\n", filename, *npts, *nedges);
+
+    *vertices_p = (double*)malloc(sizeof(double) * 3 * (*npts));
+    *edge_idx_p = (uint32_t*)malloc(sizeof(uint32_t) * 2 * (*nedges));
+    for (uint32_t i = 0; i < (*npts); i++)
+        if (fscanf(
+                file, " %lf %lf %lf ", (*vertices_p) + 3 * i, (*vertices_p) + 3 * i + 1,
+                (*vertices_p) + 3 * i + 2) != 3)
+            ip_error("read_edge_OFF: error reading vertex\n");
+    uint32_t nv;
+    for (uint32_t i = 0; i < (*nedges); i++) {
+        if (fscanf(file, " %u %u %u ", &nv, (*edge_idx_p) + 2 * i, (*edge_idx_p) + 2 * i + 1) != 3)
+            ip_error("read_edge_OFF: error reading edge\n");
+        if (nv != 2) ip_error("read_edge_OFF: each edge record must list 2 vertices\n");
+    }
+    fclose(file);
+}
+
+// Read an OFF-style point file: "OFF", then "np 0 0", np vertex lines "x y z".
+void read_points_OFF(const char* filename, double** vertices_p, uint32_t* npts, bool verbose)
+{
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) ip_error("read_points_OFF: FATAL ERROR cannot open point file.\n");
+
+    char ext[3];
+    const char target[] = {'O', 'F', 'F'};
+    if (fscanf(file, "%3c", ext) == 0) ip_error("read_points_OFF: cannot read 1st line\n");
+    for (uint32_t i = 0; i < 3; i++)
+        if (ext[i] != target[i]) ip_error("read_points_OFF: 1st line is not OFF\n");
+
+    off_skip_comments(file);
+    uint32_t nf = 0, dummy = 0;
+    if (fscanf(file, " %u %u %u ", npts, &nf, &dummy) < 1)
+        ip_error("read_points_OFF: cannot read vertex count\n");
+    if (verbose) printf("point file %s: %u points\n", filename, *npts);
+
+    *vertices_p = (double*)malloc(sizeof(double) * 3 * (*npts));
+    for (uint32_t i = 0; i < (*npts); i++)
+        if (fscanf(
+                file, " %lf %lf %lf ", (*vertices_p) + 3 * i, (*vertices_p) + 3 * i + 1,
+                (*vertices_p) + 3 * i + 2) != 3)
+            ip_error("read_points_OFF: error reading point\n");
+    fclose(file);
+}
+
 void read_TET_file(
     const char* filename,
     double** vertices_p,
@@ -193,10 +261,11 @@ void read_MEDIT_file(
 int main(int argc, char** argv)
 {
     if (argc < 2) {
-        printf("\nUsage: mesh_generator [-v | -l | -s | -b | -t] inputfile_A.off [bool_opcode "
-               "inputfile_B.off]\n\n"
+        printf("\nUsage: mesh_generator [-v | -l | -s | -b | -t] [inputfile_A.off] [bool_opcode "
+               "inputfile_B.off] [-e edges.off] [-p points.off]\n\n"
                "Defines the volume enclosed by the input OFF file(s) and saves a volume mesh to "
-               "'volume.msh'\n\n"
+               "'volume.msh'. The surface (inputfile_A.off), -e edges, and -p points are all "
+               "optional; provide any non-empty combination.\n\n"
                "Command line arguments:\n"
                "-v = verbose mode\n"
                "-l = logging mode (appends a line to mesh_generator.log)\n"
@@ -208,6 +277,10 @@ int main(int argc, char** argv)
                "     domain, so the -t surface tracking is exact (no cells are deleted)\n"
                "-f = fill holes: cap open boundaries with ear-clipped triangles (off by\n"
                "     default; only affects the solid-output min-cut path)\n"
+               "-e edges.off  = also insert these edges into the output (implies -a); OFF\n"
+               "     with 'nv ne 0' then vertices then edge records '2 i j'\n"
+               "-p points.off = also insert these points into the output (implies -a); OFF\n"
+               "     with 'np 0 0' then vertex lines\n"
                "bool_opcode: {U, I, D}\n"
                "  U -> union (AuB),\n"
                "  I -> intersection (A^B),\n"
@@ -225,6 +298,8 @@ int main(int argc, char** argv)
     bool export_rational = false;
     bool fill_holes = false; // -f: opt-in cap of open boundaries (solid-output path)
     bool keep_all_cells = false; // -a: skip in/out min-cut, keep the whole domain
+    char* edge_file = NULL; // -e: extra edges to insert
+    char* point_file = NULL; // -p: extra points to insert
     char* fileA_name = NULL;
     char* fileB_name = NULL;
     char bool_opcode = '0';
@@ -247,7 +322,13 @@ int main(int argc, char** argv)
                 fill_holes = true;
             else if (argv[i][1] == 'a')
                 keep_all_cells = true;
-            else
+            else if (argv[i][1] == 'e') {
+                if (i + 1 >= argc) ip_error("-e requires an edge file argument\n");
+                edge_file = argv[++i];
+            } else if (argv[i][1] == 'p') {
+                if (i + 1 >= argc) ip_error("-p requires a point file argument\n");
+                point_file = argv[++i];
+            } else
                 ip_error("Unknown option\n");
         } else if (fileA_name == NULL)
             fileA_name = argv[i];
@@ -281,7 +362,14 @@ int main(int argc, char** argv)
         }
     }
 
-    double *coords_A, *coords_B = NULL;
+    // The surface (fileA), edges (-e), and points (-p) are all optional; at least one
+    // must be given. Only edges / only points / only a surface / any combination works.
+    if (fileA_name == NULL && edge_file == NULL && point_file == NULL)
+        ip_error("No input: provide a surface .off and/or -e edges.off and/or -p points.off\n");
+    if (fileA_name == NULL && two_input)
+        ip_error("A boolean operation needs a surface input\n");
+
+    double *coords_A = NULL, *coords_B = NULL;
     uint32_t ncoords_A = 0, ncoords_B = 0;
     uint32_t *tri_idx_A = NULL, *tri_idx_B = NULL;
     uint32_t ntriidx_A = 0, ntriidx_B = 0;
@@ -294,7 +382,8 @@ int main(int argc, char** argv)
     bool embedsurf = (file_B_is_tet || file_B_is_msh);
     if (embedsurf) two_input = false;
 
-    read_OFF_file(fileA_name, &coords_A, &ncoords_A, &tri_idx_A, &ntriidx_A, verbose);
+    if (fileA_name)
+        read_OFF_file(fileA_name, &coords_A, &ncoords_A, &tri_idx_A, &ntriidx_A, verbose);
     if (two_input)
         read_OFF_file(fileB_name, &coords_B, &ncoords_B, &tri_idx_B, &ntriidx_B, verbose);
 
@@ -338,7 +427,23 @@ int main(int argc, char** argv)
             verbose);
         free(coords_A);
         free(tri_idx_A);
-    } else
+    } else {
+        // Optional extra edges/points to insert into the tetrahedralization.
+        extra_features_t extra;
+        double *edge_verts = NULL, *point_verts = NULL;
+        uint32_t *edge_idx = NULL, n_edge_verts = 0, n_edges = 0, n_points = 0;
+        if (edge_file) {
+            read_edge_OFF(edge_file, &edge_verts, &n_edge_verts, &edge_idx, &n_edges, verbose);
+            extra.edge_verts = edge_verts;
+            extra.n_edge_verts = n_edge_verts;
+            extra.edge_idx = edge_idx;
+            extra.n_edges = n_edges;
+        }
+        if (point_file) {
+            read_points_OFF(point_file, &point_verts, &n_points, verbose);
+            extra.point_verts = point_verts;
+            extra.n_points = n_points;
+        }
         complex = makePolyhedralMesh(
             fileA_name,
             coords_A,
@@ -355,7 +460,12 @@ int main(int argc, char** argv)
             verbose,
             logging,
             fill_holes,
-            keep_all_cells);
+            keep_all_cells,
+            (edge_file || point_file) ? &extra : nullptr);
+        if (edge_verts) free(edge_verts);
+        if (edge_idx) free(edge_idx);
+        if (point_verts) free(point_verts);
+    }
 
     printf("Writing output file...\n");
     if (blackfaces)

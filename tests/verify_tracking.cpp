@@ -26,6 +26,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using vol_rem::bigrational;
@@ -117,15 +118,30 @@ static bigrational tri_2area(const R3& a, const R3& b, const R3& c, int axis)
 
 int main(int argc, char** argv)
 {
-    if (argc < 3) die("usage: verify_tracking <input.off> <volume.tet>");
+    if (argc < 3)
+        die("usage: verify_tracking <input.off> <volume.tet> [--edges e.off] [--points p.off] "
+            "[--strict]");
     const std::string off_path = argv[1], tet_path = argv[2];
 
-    // input surface: vertices (exact doubles) + triangles.
+    bool strict = false;
+    std::string edges_path, points_path;
+    for (int i = 3; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--strict")
+            strict = true;
+        else if (a == "--edges" && i + 1 < argc)
+            edges_path = argv[++i];
+        else if (a == "--points" && i + 1 < argc)
+            points_path = argv[++i];
+    }
+
+    // input surface: vertices (exact doubles) + triangles. The surface is optional --
+    // pass "none" (or a path that does not exist) when the input has only edges/points.
     std::vector<R3> in_vtx;
     std::vector<std::array<uint32_t, 3>> in_tri;
-    {
+    if (off_path != "none") {
         std::ifstream in(off_path);
-        if (!in) die("cannot open input off");
+        if (!in) die("cannot open input off (pass \"none\" if there is no surface)");
         std::string line;
         if (!next_line(in, line) || line.substr(0, 3) != "OFF") die("not an OFF");
         uint32_t nv, nf, ne;
@@ -167,8 +183,12 @@ int main(int argc, char** argv)
         }
     }
 
-    // exact output vertex coordinates (.rational), same order as the .tet.
-    std::vector<R3> out_vtx;
+    // exact output vertex coordinates (.rational), same order as the .tet. The lines are
+    // read as strings and parsed to exact rationals only on first access (get_out): a big
+    // keep-all-cells output has millions of vertices but a check only touches a small
+    // fraction (surface faces + edge/point primitives), and parsing every rational -- with
+    // the no-GMP bignum backend especially -- would dominate the runtime.
+    std::vector<std::string> rat_line;
     {
         std::ifstream in(tet_path + ".rational");
         if (!in) die("cannot open .rational (run with -t -r)");
@@ -177,13 +197,20 @@ int main(int argc, char** argv)
         if (!next_line(in, line)) die("bad .rational");
         std::istringstream(line) >> n;
         if (n != out_nv) die(".rational count != .tet");
+        rat_line.resize(n);
         for (uint32_t i = 0; i < n; i++) {
             if (!next_line(in, line)) die("truncated .rational");
-            std::string sx, sy, sz;
-            std::istringstream(line) >> sx >> sy >> sz;
-            out_vtx.push_back({parse_rat(sx), parse_rat(sy), parse_rat(sz)});
+            rat_line[i] = line;
         }
     }
+    std::unordered_map<uint32_t, R3> out_cache;
+    auto get_out = [&](uint32_t i) -> const R3& {
+        auto it = out_cache.find(i);
+        if (it != out_cache.end()) return it->second;
+        std::string sx, sy, sz;
+        std::istringstream(rat_line.at(i)) >> sx >> sy >> sz;
+        return out_cache.emplace(i, R3{parse_rat(sx), parse_rat(sy), parse_rat(sz)}).first->second;
+    };
 
     // coplanar group of each input triangle (.groups).
     std::vector<uint32_t> tri_group;
@@ -269,7 +296,7 @@ int main(int argc, char** argv)
         std::array<R3, 3> F;
         int p = 0;
         for (int i = 0; i < 4; i++)
-            if (i != e.lf) F[p++] = out_vtx.at(t[i]);
+            if (i != e.lf) F[p++] = get_out(t[i]);
 
         // flag consistency: "not a 1-1 map" == overlaps >1 group, or a single group
         // that itself has >= 2 input triangles.
@@ -332,11 +359,168 @@ int main(int argc, char** argv)
                "        not indicate a tracking error -- see the comment in verify_tracking.cpp.\n"
                "        It IS a real error on exactly-coplanar inputs (pass --strict to enforce).\n");
 
-    bool strict = false;
-    for (int i = 3; i < argc; i++)
-        if (std::string(argv[i]) == "--strict") strict = true;
+    // ---- inserted-edge / inserted-point provenance (exact) ------------------
+    // These are exact by construction, so any mismatch is a hard failure.
+    uint64_t edge_fail = 0, point_fail = 0;
+    size_t n_in_edges = 0, n_in_points = 0;
+    const bigrational ONE(1.0);
 
-    bool ok = !sound_fail && !flag_fail && (!strict || coverage_ok);
+    if (!edges_path.empty()) {
+        // input edges: OFF-style "nv ne 0", vertices, then "2 i j" records.
+        std::vector<R3> ev;
+        std::vector<std::array<uint32_t, 2>> ei;
+        {
+            std::ifstream in(edges_path);
+            if (!in) die("cannot open --edges file");
+            std::string line;
+            if (!next_line(in, line) || line.substr(0, 3) != "OFF") die("edges file not OFF");
+            uint32_t nv, ne, dummy;
+            if (!next_line(in, line)) die("bad edge header");
+            std::istringstream(line) >> nv >> ne >> dummy;
+            for (uint32_t i = 0; i < nv; i++) {
+                if (!next_line(in, line)) die("truncated edge verts");
+                double x, y, z;
+                std::istringstream(line) >> x >> y >> z;
+                ev.push_back({bigrational(x), bigrational(y), bigrational(z)});
+            }
+            for (uint32_t i = 0; i < ne; i++) {
+                if (!next_line(in, line)) die("truncated edges");
+                uint32_t k, a, b;
+                std::istringstream(line) >> k >> a >> b;
+                ei.push_back({a, b});
+            }
+        }
+        n_in_edges = ei.size();
+        // .edgeprov: per input edge, the output tet edges lying on it.
+        std::vector<std::vector<std::array<uint32_t, 2>>> eprov(ei.size());
+        {
+            std::ifstream in(tet_path + ".edgeprov");
+            if (!in) die("cannot open .edgeprov");
+            std::string line;
+            if (!next_line(in, line)) die("bad .edgeprov");
+            uint32_t n;
+            std::istringstream(line) >> n;
+            for (uint32_t i = 0; i < n; i++) {
+                if (!next_line(in, line)) die("truncated .edgeprov");
+                std::istringstream ss(line);
+                uint32_t eid, m;
+                ss >> eid >> m;
+                std::vector<std::array<uint32_t, 2>> es;
+                for (uint32_t j = 0; j < m; j++) {
+                    uint32_t a, b;
+                    ss >> a >> b;
+                    es.push_back({a, b});
+                }
+                if (eid < eprov.size()) eprov[eid] = es;
+            }
+        }
+        // Each edge's output edges must exactly tile its segment [A,B].
+        for (size_t e = 0; e < ei.size(); e++) {
+            const R3& A = ev[ei[e][0]];
+            const R3& B = ev[ei[e][1]];
+            const bigrational len2 = (B[0] - A[0]) * (B[0] - A[0]) + (B[1] - A[1]) * (B[1] - A[1]) +
+                                     (B[2] - A[2]) * (B[2] - A[2]);
+            auto param = [&](const R3& P, bigrational& t) -> bool {
+                const bigrational ux = P[0] - A[0], uy = P[1] - A[1], uz = P[2] - A[2];
+                const bigrational vx = B[0] - A[0], vy = B[1] - A[1], vz = B[2] - A[2];
+                if (uy * vz - uz * vy != ZERO || uz * vx - ux * vz != ZERO ||
+                    ux * vy - uy * vx != ZERO)
+                    return false; // not collinear with AB
+                t = (ux * vx + uy * vy + uz * vz) / len2;
+                return true;
+            };
+            const char* why = nullptr;
+            std::vector<std::array<bigrational, 2>> iv;
+            if (eprov[e].empty())
+                why = "no output edges";
+            for (const auto& oe : eprov[e]) {
+                if (why) break;
+                bigrational tu, tv;
+                if (!param(get_out(oe[0]), tu) || !param(get_out(oe[1]), tv))
+                    why = "output edge not collinear with segment";
+                else {
+                    if (tu > tv) std::swap(tu, tv);
+                    if (tu < ZERO || tv > ONE || !(tu < tv))
+                        why = "output edge outside segment or degenerate";
+                    else
+                        iv.push_back({tu, tv});
+                }
+            }
+            if (!why) {
+                std::sort(iv.begin(), iv.end(), [](const std::array<bigrational, 2>& x,
+                                                   const std::array<bigrational, 2>& y) {
+                    return x[0] < y[0];
+                });
+                if (iv.front()[0] != ZERO || iv.back()[1] != ONE)
+                    why = "output edges do not reach both endpoints";
+                for (size_t i = 1; i < iv.size() && !why; i++)
+                    if (iv[i][0] != iv[i - 1][1]) why = "gap or overlap between output edges";
+            }
+            if (why) {
+                edge_fail++;
+                if (getenv("VT_DEBUG")) fprintf(stderr, "[VT] edge %zu: %s\n", e, why);
+            }
+        }
+    }
+
+    if (!points_path.empty()) {
+        // input points: OFF-style "np 0 0" then vertex lines.
+        std::vector<R3> pv;
+        {
+            std::ifstream in(points_path);
+            if (!in) die("cannot open --points file");
+            std::string line;
+            if (!next_line(in, line) || line.substr(0, 3) != "OFF") die("points file not OFF");
+            uint32_t nv, nf, dummy;
+            if (!next_line(in, line)) die("bad point header");
+            std::istringstream(line) >> nv >> nf >> dummy;
+            for (uint32_t i = 0; i < nv; i++) {
+                if (!next_line(in, line)) die("truncated points");
+                double x, y, z;
+                std::istringstream(line) >> x >> y >> z;
+                pv.push_back({bigrational(x), bigrational(y), bigrational(z)});
+            }
+        }
+        n_in_points = pv.size();
+        std::vector<long long> pprov(pv.size(), -1);
+        {
+            std::ifstream in(tet_path + ".pointprov");
+            if (!in) die("cannot open .pointprov");
+            std::string line;
+            if (!next_line(in, line)) die("bad .pointprov");
+            uint32_t n;
+            std::istringstream(line) >> n;
+            for (uint32_t i = 0; i < n; i++) {
+                if (!next_line(in, line)) die("truncated .pointprov");
+                uint32_t pid;
+                long long out;
+                std::istringstream(line) >> pid >> out;
+                if (pid < pprov.size()) pprov[pid] = out;
+            }
+        }
+        for (size_t p = 0; p < pv.size(); p++) {
+            if (pprov[p] < 0 || (size_t)pprov[p] >= out_nv) {
+                point_fail++;
+                if (getenv("VT_DEBUG")) fprintf(stderr, "[VT] point %zu: absent from output\n", p);
+                continue;
+            }
+            const R3& o = get_out((uint32_t)pprov[p]);
+            if (o[0] != pv[p][0] || o[1] != pv[p][1] || o[2] != pv[p][2]) {
+                point_fail++;
+                if (getenv("VT_DEBUG"))
+                    fprintf(stderr, "[VT] point %zu: output vertex coords differ\n", p);
+            }
+        }
+    }
+
+    if (n_in_edges)
+        printf("  edges     (each input edge tiled by output tet edges): %s (%llu bad of %zu)\n",
+            edge_fail ? "FAIL" : "ok", (unsigned long long)edge_fail, n_in_edges);
+    if (n_in_points)
+        printf("  points    (each input point == an output vertex):      %s (%llu bad of %zu)\n",
+            point_fail ? "FAIL" : "ok", (unsigned long long)point_fail, n_in_points);
+
+    bool ok = !sound_fail && !flag_fail && !edge_fail && !point_fail && (!strict || coverage_ok);
     printf("%s\n", ok ? "TRACKING OK" : "TRACKING FAILED");
     return ok ? 0 : 1;
 }

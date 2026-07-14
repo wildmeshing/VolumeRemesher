@@ -2,10 +2,13 @@
 #include <time.h>
 #include <algorithm>
 #include <cassert>
+#include <cfloat>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include "delaunay.h"
 
 #define OPPOSITE_SIGNE(a, b) (a < 0 && b > 0) || (a > 0 && b < 0)
@@ -910,12 +913,17 @@ BSPcomplex::BSPcomplex(
 
     // Uploading the constraints (the last num_virtual_triangles constraints are virtual.)
     first_virtual_constraint = _constraints->num_triangles - _constraints->num_virtual_triangles;
-    // Real constraints are [0, first_virtual_constraint): genuine input triangles in
-    // [0, first_fake_constraint) and hole-cap "fake" triangles in the rest. When no
-    // holes were filled (num_input_triangles unset), everything real is input.
-    first_fake_constraint = (_constraints->num_input_triangles > 0)
-        ? _constraints->num_input_triangles
-        : first_virtual_constraint;
+    // Carve the real-constraint range [0, first_virtual_constraint) into surface / cap /
+    // edge / point sub-ranges (see the BSP.h layout comment). Point-forcing triangles sit
+    // just before the virtual ones, edge-forcing just before those; when no holes were
+    // filled (num_input_triangles unset) every real constraint is input surface.
+    num_edge_triangles = _constraints->num_edge_triangles;
+    num_point_triangles = _constraints->num_point_triangles;
+    first_point_constraint = first_virtual_constraint - num_point_triangles;
+    first_edge_constraint = first_point_constraint - num_edge_triangles;
+    first_fake_constraint = (_constraints->num_input_triangles == UINT32_MAX)
+        ? first_virtual_constraint
+        : _constraints->num_input_triangles;
     constraints_vrts.resize(3 * _constraints->num_triangles);
     constraint_group.resize(_constraints->num_triangles);
     for (uint32_t i = 0; i < _constraints->num_triangles; i++) {
@@ -2750,6 +2758,8 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
     // Tag output tet faces that lie on the input surface with their input triangles.
     // Done after the winding-flip so local-face indices match the emitted vertex order.
     trackFaceProvenance();
+    // Tag output tet edges/vertices coming from inserted edges/points.
+    trackEdgePointProvenance();
 
     if (verbose) printf("Tetrahedra: %lu\n", final_tets.size() / 4);
 }
@@ -2919,6 +2929,140 @@ void BSPcomplex::trackFaceProvenance()
             if (!cache_groups[fi].empty())
                 face_provenance.push_back({k, (uint8_t)lf, cache_groups[fi]});
         }
+    }
+}
+
+void BSPcomplex::trackEdgePointProvenance()
+{
+    edge_provenance.clear();
+    point_provenance.clear();
+    const uint32_t n_edges = num_edge_triangles / 2;
+    const uint32_t n_points = num_point_triangles / 3;
+    if (n_edges == 0 && n_points == 0) return;
+
+    // Which vertices are used by the output tets, and the set of output tet edges.
+    std::vector<char> used(vertices.size(), 0);
+    for (uint32_t v : final_tets) used[v] = 1;
+    std::set<std::pair<uint32_t, uint32_t>> tet_edges;
+    static const int E[6][2] = {{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}};
+    for (uint32_t k = 0; 4u * k < final_tets.size(); k++) {
+        const uint32_t* tet = &final_tets[4 * k];
+        for (auto& ee : E) {
+            uint32_t a = tet[ee[0]], b = tet[ee[1]];
+            if (a > b) std::swap(a, b);
+            tet_edges.insert({a, b});
+        }
+    }
+
+    // Each inserted edge is pinned by its two forcing triangles (A,B,*): A and B are the
+    // first two vertices of the constraint at first_edge_constraint + 2*e. The output tet
+    // edges on segment AB are the consecutive pairs of the output vertices lying on AB.
+    //
+    // Testing every output vertex against every edge is O(n_edges * n_vertices) and far too
+    // slow at scale, so bucket the used output vertices into a uniform spatial grid (on
+    // APPROXIMATE coordinates) and, per edge, gather only the vertices near the segment.
+    // The grid merely prunes candidates; membership is still decided by the exact
+    // pointInSegment test, so the approximate bucketing does not affect the result.
+    if (n_edges > 0) {
+        const uint32_t NV = (uint32_t)vertices.size();
+        std::vector<double> ax(3 * NV, 0.0);
+        double blo[3] = {DBL_MAX, DBL_MAX, DBL_MAX}, bhi[3] = {-DBL_MAX, -DBL_MAX, -DBL_MAX};
+        uint64_t nused = 0;
+        for (uint32_t v = 0; v < NV; v++)
+            if (used[v]) {
+                vertices[v]->getApproxXYZCoordinates(ax[3 * v], ax[3 * v + 1], ax[3 * v + 2]);
+                for (int k = 0; k < 3; k++) {
+                    if (ax[3 * v + k] < blo[k]) blo[k] = ax[3 * v + k];
+                    if (ax[3 * v + k] > bhi[k]) bhi[k] = ax[3 * v + k];
+                }
+                nused++;
+            }
+        int gridN = (int)std::cbrt((double)(nused > 1 ? nused : 1));
+        if (gridN < 4) gridN = 4;
+        if (gridN > 256) gridN = 256;
+        double ext = 0.0;
+        for (int k = 0; k < 3; k++) ext = std::max(ext, bhi[k] - blo[k]);
+        const double cell = (ext > 0.0) ? ext / gridN : 1.0;
+        const int64_t OFF = 1 << 20; // keep packed cell indices non-negative
+        auto ckey = [&](double x, double y, double z) -> uint64_t {
+            int64_t ix = (int64_t)std::floor((x - blo[0]) / cell) + OFF;
+            int64_t iy = (int64_t)std::floor((y - blo[1]) / cell) + OFF;
+            int64_t iz = (int64_t)std::floor((z - blo[2]) / cell) + OFF;
+            return (uint64_t)(ix & 0x1FFFFF) | ((uint64_t)(iy & 0x1FFFFF) << 21) |
+                   ((uint64_t)(iz & 0x1FFFFF) << 42);
+        };
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+        for (uint32_t v = 0; v < NV; v++)
+            if (used[v]) grid[ckey(ax[3 * v], ax[3 * v + 1], ax[3 * v + 2])].push_back(v);
+
+        std::vector<uint32_t> stamp(NV, 0);
+        uint32_t cur = 0;
+        std::vector<uint32_t> cand;
+        for (uint32_t e = 0; e < n_edges; e++) {
+            const uint32_t c = first_edge_constraint + 2 * e;
+            const uint32_t ia = constraints_vrts[3 * c], ib = constraints_vrts[3 * c + 1];
+            double A[3], B[3];
+            vertices[ia]->getApproxXYZCoordinates(A[0], A[1], A[2]);
+            vertices[ib]->getApproxXYZCoordinates(B[0], B[1], B[2]);
+            const double seglen = std::sqrt(
+                (B[0] - A[0]) * (B[0] - A[0]) + (B[1] - A[1]) * (B[1] - A[1]) +
+                (B[2] - A[2]) * (B[2] - A[2]));
+            const int nsamp = std::max(1, (int)(seglen / cell) + 1);
+            cur++;
+            cand.clear();
+            for (int s = 0; s <= nsamp; s++) {
+                const double t = (double)s / (double)nsamp;
+                const double px = A[0] + t * (B[0] - A[0]);
+                const double py = A[1] + t * (B[1] - A[1]);
+                const double pz = A[2] + t * (B[2] - A[2]);
+                for (int dz = -1; dz <= 1; dz++)
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++) {
+                            auto it = grid.find(
+                                ckey(px + dx * cell, py + dy * cell, pz + dz * cell));
+                            if (it == grid.end()) continue;
+                            for (uint32_t v : it->second)
+                                if (stamp[v] != cur) {
+                                    stamp[v] = cur;
+                                    cand.push_back(v);
+                                }
+                        }
+            }
+            std::vector<uint32_t> on; // candidates exactly on the closed segment [A,B]
+            for (uint32_t v : cand)
+                if (genericPoint::pointInSegment(*vertices[v], *vertices[ia], *vertices[ib]))
+                    on.push_back(v);
+            // Order them along AB: for collinear points the full lexicographic order
+            // (lessThan) is monotonic along the line.
+            std::sort(on.begin(), on.end(), [&](uint32_t x, uint32_t y) {
+                return genericPoint::lessThan(*vertices[x], *vertices[y]) < 0;
+            });
+            std::vector<std::array<uint32_t, 2>> segs;
+            for (size_t i = 0; i + 1 < on.size(); i++) {
+                uint32_t a = on[i], b = on[i + 1];
+                uint32_t lo = a < b ? a : b, hi = a < b ? b : a;
+                if (tet_edges.count({lo, hi})) segs.push_back({a, b});
+            }
+            edge_provenance.push_back({e, segs});
+        }
+    }
+
+    // Each inserted point is pinned by its three corner triangles (P,*,*): P is the first
+    // vertex of the constraint at first_point_constraint + 3*p. Report the output vertex
+    // equal to it (P itself if it survived, else any coincident used vertex).
+    for (uint32_t p = 0; p < n_points; p++) {
+        const uint32_t c = first_point_constraint + 3 * p;
+        const uint32_t ip = constraints_vrts[3 * c];
+        uint32_t out = UINT32_MAX;
+        if (used[ip])
+            out = ip;
+        else
+            for (uint32_t v = 0; v < vertices.size(); v++)
+                if (used[v] && genericPoint::coincident(*vertices[v], *vertices[ip])) {
+                    out = v;
+                    break;
+                }
+        point_provenance.push_back({p, out});
     }
 }
 
@@ -3456,6 +3600,35 @@ void BSPcomplex::saveMesh(
                 const uint32_t off = constraint_original_index.empty() ? c : constraint_original_index[c];
                 gf << off << " " << constraint_coplanar_group[c] << "\n";
             }
+        }
+
+        // Sidecar 3: provenance of inserted edges. One line per input edge:
+        // "<edge_id> <num_out_edges> <v0 v1> <v0 v1> ...", where each v is an output
+        // vertex index (same compact indexing as the .tet vertex block). The listed
+        // output tet edges tile the input segment.
+        if (!edge_provenance.empty()) {
+            ofstream ef((std::string(filename) + ".edgeprov").c_str(), std::ios::binary);
+            ef << "# edge_id num_out_edges v0 v1 ...\n";
+            ef << edge_provenance.size() << "\n";
+            for (const EdgeProvenance& ep : edge_provenance) {
+                ef << ep.edge_id << " " << ep.out_edges.size();
+                for (const auto& oe : ep.out_edges) ef << " " << vmap[oe[0]] << " " << vmap[oe[1]];
+                ef << "\n";
+            }
+        }
+
+        // Sidecar 4: provenance of inserted points. One line per input point:
+        // "<point_id> <out_vertex>" (output vertex index, or -1 if the point did not
+        // survive into the output).
+        if (!point_provenance.empty()) {
+            ofstream pf((std::string(filename) + ".pointprov").c_str(), std::ios::binary);
+            pf << "# point_id out_vertex(-1 if absent)\n";
+            pf << point_provenance.size() << "\n";
+            for (const PointProvenance& pp : point_provenance)
+                pf << pp.point_id << " "
+                   << (pp.out_vertex == UINT32_MAX ? std::string("-1")
+                                                   : std::to_string(vmap[pp.out_vertex]))
+                   << "\n";
         }
 
         // Sidecar 2 (optional, for exact verification): the output vertex coordinates
