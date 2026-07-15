@@ -116,6 +116,19 @@ endif()
 
 include(gmp)
 
+# The precompiled Windows GMP (CGAL auxiliary libraries, GMP 5.0.1) ships gmp.h + libgmp but
+# NOT the C++ wrapper gmpxx.h, so USE_GNU_GMP_CLASSES would stay off and the exact numbers
+# would use a much slower in-house bignum. gmpxx.h is a header-only wrapper over the C library
+# (which we already link -- the code uses no libgmpxx function), so bundle a copy and add it to
+# gmp::gmp's include path on Windows. The HAS_GMPXX probe below (which compiles AND links
+# test_gmpxx.cpp) then decides whether to enable it -- if the bundled header does not build on
+# the toolchain, HAS_GMPXX stays false and the in-house bignum is used, so this never breaks
+# the build.
+if(WIN32)
+	set_property(TARGET gmp::gmp APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+		"${CMAKE_CURRENT_SOURCE_DIR}/cmake/win_gmpxx")
+endif()
+
 
 # Public include directory
 target_include_directories(${PROJECT_NAME}_lib PUBLIC
