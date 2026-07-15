@@ -137,6 +137,16 @@ if(NOT HAS_PARENT)
 	)
 	target_link_libraries(${PROJECT_NAME} PUBLIC VolumeRemesher::VolumeRemesher)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE VOL_REM_MODELS_PATH=\"${CMAKE_SOURCE_DIR}/models\")
+	# On Windows GMP is a downloaded DLL. Once USE_GNU_GMP_CLASSES is on the executable
+	# depends on it at runtime, so copy it next to the .exe (its own directory is the
+	# first place Windows looks). No-op elsewhere: GMP is a system shared library found
+	# via the loader, and $<TARGET_RUNTIME_DLLS> is empty off Windows.
+	if(WIN32)
+		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				$<TARGET_RUNTIME_DLLS:${PROJECT_NAME}> $<TARGET_FILE_DIR:${PROJECT_NAME}>
+			COMMAND_EXPAND_LISTS)
+	endif()
 endif()
 
 try_compile(HAS_GMPXX ${CMAKE_BINARY_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_gmpxx.cpp" LINK_LIBRARIES gmp::gmp)

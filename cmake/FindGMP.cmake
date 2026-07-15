@@ -24,15 +24,18 @@ find_library(GMP_LIBRARIES
 
 set(GMP_EXTRA_VARS "")
 if(WIN32)
-    # Find dll file and set IMPORTED_LOCATION to the .dll file
+    # Find dll file and set IMPORTED_LOCATION to the .dll file. The CGAL v6.2
+    # package puts it in bin/ as gmp-10.dll; the older v5.2.1 one had lib/libgmp-10.dll.
     find_file(GMP_RUNTIME_LIB
         NAMES
+            gmp-10.dll
             gmp.dll
             libgmp-10.dll
         PATHS
             ENV GMP_DIR
             ${LIB_INSTALL_DIR}
         PATH_SUFFIXES
+            bin
             lib
     )
     list(APPEND GMP_EXTRA_VARS GMP_RUNTIME_LIB)
