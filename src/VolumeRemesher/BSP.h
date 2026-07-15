@@ -202,6 +202,22 @@ public:
     // constraints_vrts.size()/3 .
     std::vector<CONSTR_GROUP_T> constraint_group;
     uint32_t first_virtual_constraint;
+    // Constraint layout (all indices are into constraints_vrts / 3):
+    //   [0, first_fake_constraint)          genuine input surface triangles
+    //   [first_fake_constraint, first_edge_constraint)   hole-cap ("fake") triangles
+    //   [first_edge_constraint, first_point_constraint)  edge-forcing triangles (2/edge)
+    //   [first_point_constraint, first_virtual_constraint) point-forcing triangles (3/pt)
+    //   [first_virtual_constraint, end)      virtual (bounding-box) constraints
+    // Caps/edge/point/virtual constraints carry no surface provenance and are excluded
+    // from the surface tracking. When a category is empty its two bounds coincide.
+    uint32_t first_fake_constraint;
+    uint32_t first_edge_constraint;
+    uint32_t first_point_constraint;
+    uint32_t num_edge_triangles; // 2 per inserted edge
+    uint32_t num_point_triangles; // 3 per inserted point
+    // Per real constraint: its triangle index in the input file (before degenerate
+    // triangles were dropped). Empty if the input did not provide it.
+    std::vector<uint32_t> constraint_original_index;
 
     std::vector<uint32_t> final_tets; // Simple vector storing the tetrahedra
     // (only used when saving a tet-mesh)
@@ -210,6 +226,39 @@ public:
     // final_tets[4*k .. 4*k+3]). Filled by makeTetrahedra so the surface-embedding
     // path can map every output tet back to the cell it was carved from.
     std::vector<uint32_t> final_tets_parent_cell;
+
+    // Coplanar grouping of the input constraints: input triangles are partitioned
+    // into maximal edge-connected coplanar groups (a flat region = one group, a
+    // triangle with no coplanar neighbour = a singleton group). Filled by
+    // computeCoplanarGroups(). constraint_coplanar_group[c] is the group id (0..K-1)
+    // of real constraint c; group_size[g] is how many triangles are in group g.
+    std::vector<uint32_t> constraint_coplanar_group;
+    std::vector<uint32_t> coplanar_group_size;
+
+    // Input-surface provenance, keyed by coplanar group (see computeCoplanarGroups) so it is
+    // symmetric with edge_provenance/point_provenance: triangle_provenance[g] lists the output
+    // tet faces tiling group g, each as {tet_id, v0, v1, v2} -- an output tet index plus the
+    // three output vertices (vertices[] ids) of that tet's face. A face on two overlapping
+    // coplanar surfaces is listed under both their groups. Filled by trackFaceProvenance.
+    std::vector<std::vector<std::array<uint32_t, 4>>> triangle_provenance;
+
+    // Provenance of inserted edges/points (see insert_edges_and_points +
+    // trackEdgePointProvenance). Filled during makeTetrahedra.
+    struct EdgeProvenance
+    {
+        uint32_t edge_id;
+        // output tet edges on it, each as {tet_id, v0, v1}: an output tet index plus the two
+        // output vertices (vertices[] ids) of that tet's edge.
+        std::vector<std::array<uint32_t, 3>> out_edges;
+    };
+    std::vector<EdgeProvenance> edge_provenance;
+    struct PointProvenance
+    {
+        uint32_t point_id;
+        uint32_t tet; // an output tet containing out_vertex (UINT32_MAX if absent)
+        uint32_t out_vertex; // vertices[] id of the output vertex equal to it (UINT32_MAX if absent)
+    };
+    std::vector<PointProvenance> point_provenance;
 
 
     // Supporting vectors
@@ -265,7 +314,11 @@ public:
     void saveSkin(const char* filename, const char bool_opcode, bool triangulate = false);
 
     // Save the mesh
-    void saveMesh(const char* filename, const char bool_opcode, bool tetrahedrize = false);
+    void saveMesh(
+        const char* filename,
+        const char bool_opcode,
+        bool tetrahedrize = false,
+        bool export_rational = false);
 
     // Makes a triangle mesh out of the skin faces
     void extractSkinTriMesh(
@@ -402,6 +455,18 @@ public:
     // boolean classification. The surface-embedding path uses this because it
     // keeps the whole background domain instead of one boolean region.
     void makeTetrahedra(bool verbose = false, bool keep_all_cells = false);
+
+    // Partitions the input constraints into edge-connected coplanar groups.
+    void computeCoplanarGroups();
+
+    // Fills edge_provenance / point_provenance: for each inserted edge, the output tet
+    // edges lying on it; for each inserted point, the output vertex equal to it. Called
+    // from makeTetrahedra after the tets are built.
+    void trackEdgePointProvenance();
+
+    // Fills triangle_provenance: for each coplanar group, the output tet faces tiling it.
+    // Called from makeTetrahedra.
+    void trackFaceProvenance();
 };
 
 /// <summary>
@@ -437,7 +502,20 @@ BSPcomplex* makePolyhedralMesh(
     char bool_opcode = '0',
     bool free_mem = false,
     bool verbose = false,
-    bool logging = false);
+    bool logging = false,
+    // Cap open boundaries with ear-clipped "fake" triangles before meshing. Opt-in
+    // (off by default): the exact surface tracking is obtained with keep_all_cells,
+    // which needs no caps. Caps only help the solid-output (min-cut) path close open
+    // boundaries, at the cost of a non-planar cap possibly slicing through the shell.
+    bool fill_holes = false,
+    // Keep the entire tetrahedralized domain instead of only the solid interior: skip
+    // the in/out min-cut classification (mark every cell internal). This makes the
+    // BLACK-face surface tracking exact -- see makePolyhedralMesh. Intended for the
+    // single-input tracking path (bool_opcode == '0').
+    bool keep_all_cells = false,
+    // Optional extra edges/points to force into the output (see insert_edges_and_points).
+    // When present, keep_all_cells is implied so they survive into the tetrahedralization.
+    const extra_features_t* extra = nullptr);
 
 /// <summary>
 /// Same as above, but file B represents a tetrahedral mesh where A will be embedded
@@ -462,7 +540,9 @@ BSPcomplex* remakePolyhedralMesh(
     const uint32_t* tet_idx_B,
     uint32_t ntet_B,
     bool verbose,
-    bool no_class = false);
+    bool no_class = false,
+    // Optional extra edges/points to force into the embedding (see insert_edges_and_points).
+    const extra_features_t* extra = nullptr);
 } // namespace vol_rem
 
 #endif /* BSP_h */

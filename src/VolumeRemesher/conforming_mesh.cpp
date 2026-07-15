@@ -2,6 +2,16 @@
 #include <VolumeRemesher/implicit_point.h>
 #include "extended_predicates.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <map>
+#include <set>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
 #define INTERSECTION 1
 #define IMPROPER_INTERSECTION 2
 #define IMPROPER_INTERSECTION_COUNTED 3
@@ -875,6 +885,432 @@ place_virtual_constraints(TetMesh* mesh, constraints_t* constraints, half_edge_t
     free(need_virtual_constraint);
 
     return num_virtual_constraints;
+}
+
+
+/*************************************************************/
+/** hole filling (cap open boundaries with fake triangles)  **/
+/*************************************************************/
+
+namespace {
+
+// Hash of an exact (x,y,z) coordinate, for de-duplicating appended vertices.
+struct CoordHash
+{
+    size_t operator()(const std::array<double, 3>& a) const
+    {
+        uint64_t h = 1469598103934665603ull;
+        for (double d : a) {
+            uint64_t u;
+            std::memcpy(&u, &d, sizeof(u));
+            h = (h ^ u) * 1099511628211ull;
+        }
+        return (size_t)h;
+    }
+};
+
+// Project the 3D coordinate c to 2D by dropping the dominant axis `dom` (0/1/2).
+inline void proj2d(const double* c, int dom, double out[2])
+{
+    int j = 0;
+    for (int i = 0; i < 3; i++)
+        if (i != dom) out[j++] = c[i];
+}
+
+// Is projected point p strictly inside the projected triangle (a,b,c) whose
+// orientation sign is `ori` (+1 or -1)? Uses the exact-sign 2D orientation, so the
+// answer is identical on every platform (points strictly on an edge do not count).
+inline bool
+point_in_tri2d(const double* p, const double* a, const double* b, const double* c, int ori)
+{
+    return signe_orient2d(a, b, p) == ori && signe_orient2d(b, c, p) == ori &&
+           signe_orient2d(c, a, p) == ori;
+}
+
+// Ear-clip one boundary loop (vertex indices, already oriented so the emitted cap
+// triangles carry the reversed boundary half-edges). Appends triangles (3 vertex
+// indices each) to `out`. All geometric decisions use exact-sign predicates so the
+// triangulation is deterministic across platforms. Falls back to a fan for the part
+// it cannot ear-clip (non-simple projection), guaranteeing the hole is capped.
+void ear_clip_loop(const std::vector<uint32_t>& loop, const TetMesh* mesh, std::vector<uint32_t>& out)
+{
+    const uint32_t k = (uint32_t)loop.size();
+    if (k < 3) return;
+
+    // Choose a projection plane from three spread-out loop vertices (exact, so the
+    // choice is platform-independent).
+    const double* A = mesh->vertices[loop[0]].coord;
+    const double* B = mesh->vertices[loop[k / 3]].coord;
+    const double* C = mesh->vertices[loop[2 * k / 3]].coord;
+    int dom = genericPoint::maxComponentInTriangleNormal(
+        A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2]);
+    if (dom < 0 || dom > 2) dom = 2;
+
+    std::vector<std::array<double, 2>> P(k);
+    for (uint32_t i = 0; i < k; i++) proj2d(mesh->vertices[loop[i]].coord, dom, P[i].data());
+
+    // Orientation of the projected polygon: the lexicographically-smallest vertex is
+    // a convex hull vertex, so the orient2d sign of its wedge is the polygon's sign.
+    uint32_t ex = 0;
+    for (uint32_t i = 1; i < k; i++) {
+        if (P[i][0] < P[ex][0] ||
+            (P[i][0] == P[ex][0] &&
+             (P[i][1] < P[ex][1] || (P[i][1] == P[ex][1] && loop[i] < loop[ex]))))
+            ex = i;
+    }
+    const int poly_ori =
+        signe_orient2d(P[(ex + k - 1) % k].data(), P[ex].data(), P[(ex + 1) % k].data());
+
+    // Doubly-linked list over the loop vertices for O(n^2) ear removal.
+    std::vector<uint32_t> nxt(k), prv(k);
+    for (uint32_t i = 0; i < k; i++) {
+        nxt[i] = (i + 1) % k;
+        prv[i] = (i + k - 1) % k;
+    }
+    uint32_t remaining = k, cur = 0;
+
+    if (poly_ori != 0) {
+        uint32_t stall = 0;
+        while (remaining > 3 && stall <= remaining) {
+            const uint32_t p = prv[cur], n = nxt[cur];
+            bool ear = signe_orient2d(P[p].data(), P[cur].data(), P[n].data()) == poly_ori;
+            if (ear)
+                for (uint32_t j = nxt[n]; j != p; j = nxt[j])
+                    if (point_in_tri2d(
+                            P[j].data(), P[p].data(), P[cur].data(), P[n].data(), poly_ori)) {
+                        ear = false;
+                        break;
+                    }
+            if (ear) {
+                out.push_back(loop[p]);
+                out.push_back(loop[cur]);
+                out.push_back(loop[n]);
+                nxt[p] = n;
+                prv[n] = p;
+                remaining--;
+                cur = p;
+                stall = 0;
+            } else {
+                cur = nxt[cur];
+                stall++;
+            }
+        }
+    }
+
+    // Fan-triangulate whatever is left (the final triangle in the normal case, or the
+    // remaining polygon if ear removal stalled on a non-simple projection).
+    std::vector<uint32_t> rem;
+    uint32_t it = cur;
+    do {
+        rem.push_back(it);
+        it = nxt[it];
+    } while (it != cur);
+    for (size_t i = 1; i + 1 < rem.size(); i++) {
+        out.push_back(loop[rem[0]]);
+        out.push_back(loop[rem[i]]);
+        out.push_back(loop[rem[i + 1]]);
+    }
+}
+
+} // namespace
+
+uint32_t fill_holes_in_constraints(constraints_t* constraints, const TetMesh* mesh, bool verbose)
+{
+    const uint32_t n_input = constraints->num_triangles;
+    constraints->num_input_triangles = n_input;
+    if (n_input == 0) return 0;
+
+    // Find the topological boundary: undirected edges used by exactly one triangle.
+    // Using the UNDIRECTED count (rather than "a->b present but b->a absent") makes
+    // this robust to inconsistently-oriented input, where an interior edge shared by
+    // two equally-wound triangles would otherwise look like two boundary half-edges.
+    // Each boundary edge is used by a single triangle, so its one directed occurrence
+    // gives a well-defined half-edge direction (and hence a consistent cap winding for
+    // consistently-oriented input).
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> ucount; // sorted pair -> use count
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> udir; // -> directed
+    for (uint32_t t = 0; t < n_input; t++)
+        for (int e = 0; e < 3; e++) {
+            const uint32_t a = constraints->tri_vertices[3 * t + e];
+            const uint32_t b = constraints->tri_vertices[3 * t + (e + 1) % 3];
+            std::pair<uint32_t, uint32_t> key = a < b ? std::make_pair(a, b) : std::make_pair(b, a);
+            ucount[key]++;
+            udir[key] = {a, b};
+        }
+
+    // Boundary half-edges, grouped by start vertex (sorted -> deterministic walk).
+    std::map<uint32_t, std::vector<uint32_t>> adj;
+    std::set<std::pair<uint32_t, uint32_t>> boundary;
+    for (const auto& kv : ucount)
+        if (kv.second == 1) {
+            const std::pair<uint32_t, uint32_t>& e = udir[kv.first];
+            adj[e.first].push_back(e.second);
+            boundary.insert(e);
+        }
+    if (boundary.empty()) {
+        if (verbose) printf("\tNo holes to fill (input surface is closed)\n");
+        return 0;
+    }
+
+    // Chain boundary half-edges into loops and cap each one.
+    std::set<std::pair<uint32_t, uint32_t>> used;
+    std::vector<uint32_t> cap_tris; // flat: 3 vertex indices per cap triangle
+    uint32_t num_loops = 0;
+    for (const auto& start : boundary) {
+        if (used.count(start)) continue;
+        std::vector<uint32_t> loop;
+        uint32_t a = start.first, b = start.second;
+        used.insert({a, b});
+        loop.push_back(a);
+        // Follow next boundary half-edges until we return to the start (or dead-end).
+        for (uint32_t guard = 0; guard <= (uint32_t)boundary.size(); guard++) {
+            loop.push_back(b);
+            if (b == start.first) break;
+            const auto ait = adj.find(b);
+            uint32_t nb = UINT32_MAX;
+            if (ait != adj.end())
+                for (uint32_t cand : ait->second)
+                    if (!used.count({b, cand})) {
+                        nb = cand;
+                        break;
+                    }
+            if (nb == UINT32_MAX) break; // open chain (non-manifold boundary): best effort
+            used.insert({b, nb});
+            b = nb;
+        }
+        // loop currently is [a, ..., a]; drop the duplicated closing vertex.
+        if (loop.size() >= 2 && loop.front() == loop.back()) loop.pop_back();
+        if (loop.size() < 3) continue;
+        // Reverse so the caps carry the reversed boundary half-edges (manifold-consistent).
+        std::reverse(loop.begin(), loop.end());
+        ear_clip_loop(loop, mesh, cap_tris);
+        num_loops++;
+    }
+
+    // Drop degenerate (collinear) caps: they are zero-area and would be rejected as
+    // constraints. The corresponding boundary stays open and is handled downstream by
+    // place_virtual_constraints exactly as before, so this degrades gracefully.
+    std::vector<uint32_t> kept;
+    kept.reserve(cap_tris.size());
+    for (size_t i = 0; i + 3 <= cap_tris.size(); i += 3) {
+        const double* v0 = mesh->vertices[cap_tris[i]].coord;
+        const double* v1 = mesh->vertices[cap_tris[i + 1]].coord;
+        const double* v2 = mesh->vertices[cap_tris[i + 2]].coord;
+        if (misAlignment(v0, v1, v2)) {
+            kept.push_back(cap_tris[i]);
+            kept.push_back(cap_tris[i + 1]);
+            kept.push_back(cap_tris[i + 2]);
+        }
+    }
+    const uint32_t n_cap = (uint32_t)(kept.size() / 3);
+    if (n_cap == 0) {
+        if (verbose)
+            printf("\t%u hole loop(s) found but produced no usable caps\n", num_loops);
+        return 0;
+    }
+
+    // Append the cap constraints after the real input constraints.
+    const uint32_t n_total = n_input + n_cap;
+    constraints->tri_vertices = (uint32_t*)realloc(
+        constraints->tri_vertices, 3 * n_total * sizeof(uint32_t));
+    for (uint32_t i = 0; i < 3 * n_cap; i++)
+        constraints->tri_vertices[3 * n_input + i] = kept[i];
+    if (constraints->tri_original_index) {
+        constraints->tri_original_index = (uint32_t*)realloc(
+            constraints->tri_original_index, n_total * sizeof(uint32_t));
+        for (uint32_t i = 0; i < n_cap; i++)
+            constraints->tri_original_index[n_input + i] = UINT32_MAX; // caps: no input index
+    }
+    constraints->num_triangles = n_total;
+
+    if (verbose)
+        printf("\tFilled %u hole loop(s) with %u cap triangles\n", num_loops, n_cap);
+    return n_cap;
+}
+
+void insert_edges_and_points(
+    constraints_t* constraints, TetMesh* mesh, const extra_features_t& extra, bool verbose)
+{
+    const uint32_t n_edges = extra.n_edges;
+    const uint32_t n_points = extra.n_points;
+    if (n_edges == 0 && n_points == 0) return;
+
+    // Forcing-triangle size. It does NOT affect correctness -- the exact BSP pins the edge
+    // (as the shared crease of two non-coplanar triangles) or the point (as the apex of a
+    // corner) at any non-zero size. It DOES affect cost: a triangle that reaches a
+    // neighbouring feature intersects it and multiplies the BSP cells. Experimentally the
+    // tet count plateaus once the displacement is <= ~0.1x the local feature spacing (below
+    // that no new intersections are removed), so we use that fraction.
+    static const double DISP_FACTOR = 0.1;
+
+    // The surface triangles are [0, I); everything appended so far (hole caps) and
+    // everything appended below (edge/point forcing triangles) is non-surface. I can be 0
+    // (no surface input), so the "unset" sentinel is UINT32_MAX, not 0.
+    const uint32_t I = (constraints->num_input_triangles == UINT32_MAX)
+        ? constraints->num_triangles
+        : constraints->num_input_triangles;
+    constraints->num_input_triangles = I;
+
+    // Point displacement: a fraction of the estimated point spacing (density-aware, so it
+    // scales with how close the points are). Degenerate cases (a single point, or all
+    // coincident) fall back to the average surface/edge length, else 1. Only used when
+    // n_points > 0. All sums are in a fixed order so the result is platform-identical.
+    double point_disp = 0.0;
+    if (n_points > 0) {
+        double lo[3] = {extra.point_verts[0], extra.point_verts[1], extra.point_verts[2]};
+        double hi[3] = {lo[0], lo[1], lo[2]};
+        for (uint32_t p = 0; p < n_points; p++)
+            for (int k = 0; k < 3; k++) {
+                const double c = extra.point_verts[3 * p + k];
+                if (c < lo[k]) lo[k] = c;
+                if (c > hi[k]) hi[k] = c;
+            }
+        const double diag = std::sqrt(
+            (hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+            (hi[2] - lo[2]) * (hi[2] - lo[2]));
+        if (n_points > 1 && diag > 0.0) {
+            point_disp = DISP_FACTOR * diag / std::cbrt((double)n_points);
+        } else {
+            // single point / all coincident: use the surface (or edge) average length.
+            double lspec = 0.0;
+            uint64_t ec = 0;
+            for (uint32_t t = 0; t < I; t++)
+                for (int e = 0; e < 3; e++) {
+                    const double* p = mesh->vertices[constraints->tri_vertices[3 * t + e]].coord;
+                    const double* q =
+                        mesh->vertices[constraints->tri_vertices[3 * t + (e + 1) % 3]].coord;
+                    const double dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2];
+                    lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
+                    ec++;
+                }
+            for (uint32_t e = 0; ec == 0 && e < n_edges; e++) {
+                const double* A = &extra.edge_verts[3 * extra.edge_idx[2 * e]];
+                const double* B = &extra.edge_verts[3 * extra.edge_idx[2 * e + 1]];
+                const double dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
+                lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
+                ec++;
+            }
+            point_disp = (ec && lspec > 0.0) ? DISP_FACTOR * lspec / (double)ec : 1.0;
+        }
+        if (!(point_disp > 0.0)) point_disp = 1.0;
+    }
+
+    // Grow the vertex and constraint arrays. Per edge: 2 apex vertices + 2 triangles;
+    // per point: 1 point vertex + 3 apex vertices + 3 triangles. Edge endpoints come
+    // from extra.edge_verts (appended once).
+    const uint32_t nv_add = extra.n_edge_verts + 2 * n_edges + n_points + 3 * n_points;
+    const uint32_t nt_add = 2 * n_edges + 3 * n_points;
+    const uint32_t base_v = mesh->num_vertices;
+    const uint32_t base_t = constraints->num_triangles;
+    mesh->vertices = (vertex_t*)realloc(mesh->vertices, (base_v + nv_add) * sizeof(vertex_t));
+    constraints->tri_vertices =
+        (uint32_t*)realloc(constraints->tri_vertices, 3 * (base_t + nt_add) * sizeof(uint32_t));
+    if (constraints->tri_original_index)
+        constraints->tri_original_index =
+            (uint32_t*)realloc(constraints->tri_original_index, (base_t + nt_add) * sizeof(uint32_t));
+
+    // Deduplicate appended vertices against the existing mesh vertices and against each
+    // other: an exact-duplicate explicit point makes the Delaunay's symbolic perturbation
+    // fail (real meshes routinely produce coincident forcing-triangle apexes). Reusing a
+    // coincident vertex is safe -- the two/three forcing triangles still pin their edge /
+    // point. -0.0 is normalized to 0.0 so it matches +0.0. First occurrence wins, so the
+    // mapping is deterministic.
+    auto norm = [](double d) -> double { return d == 0.0 ? 0.0 : d; };
+    std::unordered_map<std::array<double, 3>, uint32_t, CoordHash> vmap;
+    vmap.reserve(base_v + nv_add);
+    for (uint32_t v = 0; v < base_v; v++)
+        vmap.emplace(
+            std::array<double, 3>{
+                norm(mesh->vertices[v].coord[0]), norm(mesh->vertices[v].coord[1]),
+                norm(mesh->vertices[v].coord[2])},
+            v);
+
+    uint32_t vi = base_v, ti = base_t;
+    auto add_vertex = [&](double x, double y, double z) -> uint32_t {
+        const std::array<double, 3> key = {norm(x), norm(y), norm(z)};
+        auto it = vmap.find(key);
+        if (it != vmap.end()) return it->second;
+        mesh->vertices[vi].coord[0] = x;
+        mesh->vertices[vi].coord[1] = y;
+        mesh->vertices[vi].coord[2] = z;
+        mesh->vertices[vi].original_index = vi;
+        vmap.emplace(key, vi);
+        return vi++;
+    };
+    auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c) {
+        constraints->tri_vertices[3 * ti] = a;
+        constraints->tri_vertices[3 * ti + 1] = b;
+        constraints->tri_vertices[3 * ti + 2] = c;
+        if (constraints->tri_original_index) constraints->tri_original_index[ti] = UINT32_MAX;
+        ti++;
+    };
+
+    // Edge-forcing triangles. The apex is A + |AB|*e_k; the axis with the largest
+    // |AB| component is dropped (it gives the near-collinear, smallest-area triangle),
+    // keeping the two largest-area triangles. All decisions use only exact double
+    // subtraction / abs / compare, so the choice is platform-independent.
+    // Add the edge endpoints (deduplicated) and remember each one's actual mesh index --
+    // add_vertex may return an existing index, so they are NOT at contiguous positions.
+    std::vector<uint32_t> ev_idx(extra.n_edge_verts);
+    for (uint32_t i = 0; i < extra.n_edge_verts; i++)
+        ev_idx[i] = add_vertex(
+            extra.edge_verts[3 * i], extra.edge_verts[3 * i + 1], extra.edge_verts[3 * i + 2]);
+    for (uint32_t e = 0; e < n_edges; e++) {
+        const uint32_t ia = ev_idx[extra.edge_idx[2 * e]];
+        const uint32_t ib = ev_idx[extra.edge_idx[2 * e + 1]];
+        const double* A = mesh->vertices[ia].coord;
+        const double* B = mesh->vertices[ib].coord;
+        const double dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
+        const double L = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double adx = std::fabs(dx), ady = std::fabs(dy), adz = std::fabs(dz);
+        int drop = 0;
+        double amax = adx;
+        if (ady > amax) {
+            drop = 1;
+            amax = ady;
+        }
+        if (adz > amax) drop = 2;
+        const double Le = L * DISP_FACTOR;
+        for (int k = 0; k < 3; k++) {
+            if (k == drop) continue;
+            double ax = A[0], ay = A[1], az = A[2];
+            if (k == 0)
+                ax += Le;
+            else if (k == 1)
+                ay += Le;
+            else
+                az += Le;
+            const uint32_t iap = add_vertex(ax, ay, az);
+            add_tri(ia, ib, iap);
+        }
+    }
+
+    // Point-forcing triangles: the three faces of the axis-aligned corner at P. Their
+    // planes are x=Px, y=Py, z=Pz, so they meet exactly at P, pinning it as a vertex.
+    for (uint32_t p = 0; p < n_points; p++) {
+        const double px = extra.point_verts[3 * p], py = extra.point_verts[3 * p + 1],
+                     pz = extra.point_verts[3 * p + 2];
+        const uint32_t ip = add_vertex(px, py, pz);
+        const uint32_t iax = add_vertex(px + point_disp, py, pz);
+        const uint32_t iay = add_vertex(px, py + point_disp, pz);
+        const uint32_t iaz = add_vertex(px, py, pz + point_disp);
+        add_tri(ip, iax, iay);
+        add_tri(ip, iay, iaz);
+        add_tri(ip, iaz, iax);
+    }
+
+    mesh->num_vertices = vi;
+    constraints->num_triangles = ti;
+    constraints->num_edge_triangles = 2 * n_edges;
+    constraints->num_point_triangles = 3 * n_points;
+
+    if (verbose)
+        printf(
+            "\tInserted %u edge (%u tris) and %u point (%u tris) features\n",
+            n_edges,
+            2 * n_edges,
+            n_points,
+            3 * n_points);
 }
 
 

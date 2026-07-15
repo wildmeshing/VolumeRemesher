@@ -31,6 +31,23 @@ namespace vol_rem {
 /// <param name="facets_on_input">Indexes of facets that overlap with T.</param>
 ///
 /// <param name="verbose">Set to TRUE to enable verbosity.</param>
+///
+/// EXTRA 1D/0D FEATURES (optional; pass empty vectors to skip)
+/// NOTE: as with the input surface, the extra edges/points -- and the forcing-triangle
+/// apexes they generate, which are offset by the edge length (edges) or the average input
+/// edge length (points) -- must lie inside the tet mesh M's domain.
+/// <param name="edge_vrt_coords">Vertex coordinates of the extra edges (x,y,z,...)</param>
+/// <param name="edge_indexes">Endpoint index pairs into edge_vrt_coords (e1_v1,e1_v2,...)</param>
+/// <param name="point_coords">Coordinates of the extra points (x,y,z,...)</param>
+///
+/// PROVENANCE OUTPUTS. Symmetric: each entry is an output tet index plus the output
+/// vertex indices of that tet's face / edge / vertex (indices into 'out_tets'/'vertices').
+/// <param name="out_triangle_provenance">Per input coplanar group (see the surface tracking):
+/// the output faces tiling it, each {tet, v0, v1, v2}.</param>
+/// <param name="out_edge_provenance">Per input edge: the output edges tiling it, each
+/// {tet, v0, v1}.</param>
+/// <param name="out_point_provenance">Per input point: {tet, vertex} of the output vertex equal
+/// to it, or {UINT32_MAX, UINT32_MAX} if it did not survive into the output.</param>
 
 void embed_tri_in_poly_mesh(
     const std::vector<double>& tri_vrt_coords,
@@ -45,6 +62,12 @@ void embed_tri_in_poly_mesh(
     std::vector<uint32_t>& facets_on_input,
     std::vector<bool>& cells_with_faces_on_input,
     std::vector<std::vector<uint32_t>>& final_tets_parent_faces,
+    const std::vector<double>& edge_vrt_coords,
+    const std::vector<uint32_t>& edge_indexes,
+    const std::vector<double>& point_coords,
+    std::vector<std::vector<std::array<uint32_t, 4>>>& out_triangle_provenance,
+    std::vector<std::vector<std::array<uint32_t, 3>>>& out_edge_provenance,
+    std::vector<std::array<uint32_t, 2>>& out_point_provenance,
     bool verbose);
 
 //
