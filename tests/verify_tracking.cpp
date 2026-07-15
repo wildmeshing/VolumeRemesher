@@ -58,7 +58,11 @@ static bigrational parse_rat(const std::string& s)
             den = den * ten + bigrational((double)(s[i] - '0'));
     }
     bigrational r = num / den;
-    return neg ? -r : r;
+    // Split rather than `neg ? -r : r`: gmpxx's `-r` is a lazy __gmp_expr, not a
+    // bigrational, and MSVC finds the ternary's common type ambiguous. A plain
+    // return gives the expression an unambiguous bigrational target.
+    if (neg) return -r;
+    return r;
 }
 
 static void die(const std::string& m)
@@ -79,7 +83,7 @@ static bool next_line(std::istream& in, std::string& line)
 
 // ---- exact geometry -------------------------------------------------------
 
-static bigrational rabs(const bigrational& x) { return (x < ZERO) ? -x : x; }
+static bigrational rabs(const bigrational& x) { if (x < ZERO) return -x; return x; }
 
 static bigrational orient3d(const R3& a, const R3& b, const R3& c, const R3& d)
 {
