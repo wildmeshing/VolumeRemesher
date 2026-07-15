@@ -114,16 +114,36 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
 endif()
 
 
-include(gmp)
-
-
 # Public include directory
 target_include_directories(${PROJECT_NAME}_lib PUBLIC
 	${CMAKE_CURRENT_SOURCE_DIR}/include
 	${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(${PROJECT_NAME}_lib PUBLIC gmp::gmp)
 target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_20)
+
+# Exact-arithmetic backend. By default the library uses its built-in arbitrary-
+# precision bignum (the hand-written `bigfloat`): the exact predicates only add,
+# subtract and multiply -- they never divide -- so they never pay for GMP
+# mpq_class's per-operation GCD canonicalization. That makes the built-in type
+# ~2-2.4x faster for mesh generation (measured across the model set, up to a 1.6M
+# triangle mesh) with byte-identical output. GMP is only faster for the rational-
+# heavy verify_tracking test tool. Turn this option ON to use GMP (mpq_class)
+# instead; it pulls in the GMP dependency (downloaded on Windows, plus its runtime
+# DLL) and enables USE_GNU_GMP_CLASSES.
+option(VOLUMEREMESHER_WITH_GMP "Use GMP (mpq_class) for exact arithmetic instead of the built-in bignum" OFF)
+
+if(VOLUMEREMESHER_WITH_GMP)
+	include(gmp)
+	# Enable the GMP classes only if the C++ wrapper (gmpxx.h) actually compiles and
+	# links here; otherwise warn and fall back to the built-in bignum rather than break.
+	try_compile(HAS_GMPXX ${CMAKE_BINARY_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_gmpxx.cpp" LINK_LIBRARIES gmp::gmp)
+	if(HAS_GMPXX)
+		target_link_libraries(${PROJECT_NAME}_lib PUBLIC gmp::gmp)
+		target_compile_definitions(${PROJECT_NAME}_lib PUBLIC USE_GNU_GMP_CLASSES)
+	else()
+		message(WARNING "VOLUMEREMESHER_WITH_GMP is ON but gmpxx is not usable here; using the built-in bignum")
+	endif()
+endif()
 
 
 add_library(VolumeRemesher::VolumeRemesher ALIAS ${PROJECT_NAME}_lib)
@@ -137,26 +157,16 @@ if(NOT HAS_PARENT)
 	)
 	target_link_libraries(${PROJECT_NAME} PUBLIC VolumeRemesher::VolumeRemesher)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE VOL_REM_MODELS_PATH=\"${CMAKE_SOURCE_DIR}/models\")
-	# On Windows GMP is a downloaded DLL. Once USE_GNU_GMP_CLASSES is on the executable
-	# depends on it at runtime, so copy it next to the .exe (its own directory is the
-	# first place Windows looks). No-op elsewhere: GMP is a system shared library found
-	# via the loader, and $<TARGET_RUNTIME_DLLS> is empty off Windows.
-	if(WIN32)
+	# When the optional GMP backend is used on Windows it is a downloaded DLL the
+	# executable depends on at runtime, so copy it next to the .exe (its own directory
+	# is the first place Windows looks). Skipped entirely without GMP.
+	if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				$<TARGET_RUNTIME_DLLS:${PROJECT_NAME}> $<TARGET_FILE_DIR:${PROJECT_NAME}>
 			COMMAND_EXPAND_LISTS)
 	endif()
 endif()
-
-try_compile(HAS_GMPXX ${CMAKE_BINARY_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_gmpxx.cpp" LINK_LIBRARIES gmp::gmp)
-
-if(${HAS_GMPXX})
-	target_compile_definitions(${PROJECT_NAME}_lib PUBLIC USE_GNU_GMP_CLASSES)
-else()
-	MESSAGE(WARNING "No gmpxx supported")
-endif()
-
 
 # Integration tests (only when this is the top-level project)
 option(VOLUMEREMESHER_BUILD_TESTS "Build the integration test suite" ON)

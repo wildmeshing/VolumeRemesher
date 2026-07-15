@@ -14,9 +14,9 @@ FetchContent_MakeAvailable(Catch2)
 add_executable(verify_tracking verify_tracking.cpp)
 target_link_libraries(verify_tracking PRIVATE VolumeRemesher::VolumeRemesher)
 target_compile_features(verify_tracking PRIVATE cxx_std_20)
-# Copy the Windows GMP DLL next to verify_tracking so it launches (it uses
-# bigrational == mpq_class once USE_GNU_GMP_CLASSES is on). See CMakeLists.txt.
-if(WIN32)
+# When the optional GMP backend is used on Windows, copy its DLL next to
+# verify_tracking so it launches (bigrational == mpq_class). See CMakeLists.txt.
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 	add_custom_command(TARGET verify_tracking POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different
 			$<TARGET_RUNTIME_DLLS:verify_tracking> $<TARGET_FILE_DIR:verify_tracking>
