@@ -121,6 +121,18 @@ target_include_directories(${PROJECT_NAME}_lib PUBLIC
 )
 target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_20)
 
+# Parallelize the tetrahedralization (makeTetrahedra: the per-cell decomposition and the
+# winding-flip) with std::thread. On by default; turn OFF for a fully serial build. The output
+# is byte-identical either way.
+option(VOLUMEREMESHER_PARALLEL_TETRAHEDRALIZATION
+	"Parallelize makeTetrahedra with std::thread" ON)
+if(VOLUMEREMESHER_PARALLEL_TETRAHEDRALIZATION)
+	find_package(Threads REQUIRED) # std::thread needs the platform threads library (-pthread)
+	target_link_libraries(${PROJECT_NAME}_lib PUBLIC Threads::Threads)
+else()
+	target_compile_definitions(${PROJECT_NAME}_lib PUBLIC VOLUMEREMESHER_SERIAL_TET)
+endif()
+
 # Exact-arithmetic backend. By default the library uses its built-in arbitrary-
 # precision bignum (the hand-written `bigfloat`): the exact predicates only add,
 # subtract and multiply -- they never divide -- so they never pay for GMP

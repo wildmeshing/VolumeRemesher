@@ -343,6 +343,10 @@ public:
     uint32_t count_cellVertices(const BSPcell& cell, uint64_t* num_cellEdges);
     void list_cellEdges(BSPcell& cell, vector<uint64_t>& cell_edges);
     void list_cellVertices(BSPcell& cell, uint64_t num_cellEdges, vector<uint32_t>& cell_vrts);
+    // Thread-safe variant of list_cellVertices: dedups with local containers (no shared
+    // edge_visit/vrts_visit scratch) and returns the vertices in the identical order, so it
+    // can be used from the parallel decomposition pass in makeTetrahedra.
+    void list_cellVertices_ts(const BSPcell& cell, vector<uint32_t>& cell_vrts) const;
     void list_faceVertices(BSPface& face, vector<uint32_t>& face_vrts);
     void fill_cell_locDS(BSPcell& cell, vector<uint64_t>& cell_edges, vector<uint32_t>& cell_vrts);
     inline uint64_t find_face_edge(const BSPface& face, uint32_t v, uint32_t u);
@@ -447,7 +451,9 @@ public:
     std::vector<std::array<uint32_t, 3>>
     triangulateConvexFace(const std::vector<uint32_t>& poly, const std::vector<char>& is_flat);
     void triangulateFace(uint64_t face_ind);
-    void computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& cell);
+    // Returns the star-center point for a barycenter (type-2) decomposition of `cell`
+    // WITHOUT adding it to `vertices` (the caller appends it, so this can run in parallel).
+    genericPoint* computeBaricenterPoint(const vector<uint32_t>& vrts, const BSPcell& cell);
     inline uint64_t triFace_oppEdge(const BSPface& face, uint32_t v);
     uint64_t triFace_shareEdge(const BSPcell& cell, uint64_t face_ind, uint64_t vOppEdge_ind);
     bool cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v);
