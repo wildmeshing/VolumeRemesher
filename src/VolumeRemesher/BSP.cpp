@@ -1,6 +1,7 @@
 #include "BSP.h"
 #include <time.h>
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cfloat>
 #include <cmath>
@@ -8,7 +9,9 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include "delaunay.h"
 
 #define OPPOSITE_SIGNE(a, b) (a < 0 && b > 0) || (a > 0 && b < 0)
@@ -2521,65 +2524,15 @@ void BSPcomplex::triangulateFace(uint64_t face_ind)
 // convex cell, so it is strictly interior to every face; and because TBC is an
 // implicit (rational) point, orient3D evaluates it exactly, never rounding onto a
 // plane.
-void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& cell)
+genericPoint* BSPcomplex::computeBaricenterPoint(const vector<uint32_t>& vrts, const BSPcell& cell)
 {
-    // Cheap candidate: the approximate (double) centroid of all cell vertices.
-    double cx, cy, cz;
-    double sum_x = 0.0, sum_y = 0.0, sum_z = 0.0;
-    uint32_t np = 0;
-    for (const uint32_t v : vrts)
-        if (vertices[v]->getApproxXYZCoordinates(cx, cy, cz)) {
-            sum_x += cx;
-            sum_y += cy;
-            sum_z += cz;
-            np++;
-        }
-    explicitPoint3D* cand = new explicitPoint3D(sum_x / np, sum_y / np, sum_z / np);
-
-    // Accept the cheap centroid only if it is STRICTLY INTERIOR to the cell: for every cell
-    // face it must lie off the face plane and on the cell's interior side. The cell is convex,
-    // so all its vertices lie on one closed side of each face -- the interior side is the sign
-    // of any cell vertex that is off that face's plane. (The previous test only rejected an
-    // exactly-degenerate fan, orient3D == 0, which let a centroid that fell just outside a thin
-    // near-flat convex cell through; its fan tets then land on the wrong side and overlap the
-    // neighbour, giving orientation-inconsistent output.) The exact interior barycenter below
-    // is built ONLY when this cheap centroid is rejected.
-    bool interior = true;
-    for (uint64_t fi : cell.faces) {
-        vector<uint32_t> fv(3, UINT32_MAX);
-        list_faceVertices(faces[fi], fv);
-        const genericPoint& fa = *vertices[fv[0]];
-        const genericPoint& fb = *vertices[fv[1]];
-        const genericPoint& fc = *vertices[fv[2]];
-        const int sc = genericPoint::orient3D(fa, fb, fc, *cand);
-        if (sc == 0) {
-            interior = false;
-            break;
-        }
-        int si = 0; // interior-side sign: the side of any cell vertex off this face's plane
-        for (const uint32_t w : vrts) {
-            si = genericPoint::orient3D(fa, fb, fc, *vertices[w]);
-            if (si != 0) break;
-        }
-        if ((sc < 0) != (si < 0)) {
-            interior = false;
-            break;
-        }
-    }
-    if (interior) {
-        vertices.push_back(cand);
-        vrts_visit.push_back(0);
-        return;
-    }
-    delete cand;
-
-    // Exact fallback: barycenter of four affinely-independent (non-coplanar) cell vertices.
-    // It is strictly inside the tetrahedron of those four vertices, which (the cell being
-    // convex) lies inside the cell -- so it is strictly interior and yields a valid star
-    // decomposition. Built greedily: add a vertex only if independent of the ones already
-    // chosen (2nd distinct, 3rd not collinear, 4th not coplanar). A non-degenerate
-    // (positive-volume) cell always has such a quadruple; quad[] never holds an out-of-range
-    // index, so the predicates below only see already-selected points.
+    // Exact interior barycenter: the barycenter of four affinely-independent (non-coplanar)
+    // cell vertices. It is strictly inside the tetrahedron of those four vertices, which (the
+    // cell being convex) lies inside the cell -- so it is strictly interior and always a valid
+    // star-center (an indirect/implicit point). Built greedily: add a vertex only if
+    // independent of the ones already chosen (2nd distinct, 3rd not collinear, 4th not
+    // coplanar). A non-degenerate (positive-volume) cell always has such a quadruple; quad[]
+    // never holds an out-of-range index, so the predicates only see already-selected points.
     const uint32_t n = (uint32_t)vrts.size();
     uint32_t quad[4];
     uint32_t nq = 0;
@@ -2598,10 +2551,71 @@ void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& 
         if (independent) quad[nq++] = vrts[i];
     }
     assert(nq == 4 && "computeBaricenter: cell has no 4 non-coplanar vertices (flat cell)");
+    implicitPoint3D_TBC* exact = new implicitPoint3D_TBC(
+        *vertices[quad[0]], *vertices[quad[1]], *vertices[quad[2]], *vertices[quad[3]]);
 
-    vertices.push_back(new implicitPoint3D_TBC(
-        *vertices[quad[0]], *vertices[quad[1]], *vertices[quad[2]], *vertices[quad[3]]));
-    vrts_visit.push_back(0);
+#ifndef VOLUMEREMESHER_BARY_ALWAYS_EXACT
+    // Cheap path: the approximate (double) centroid of all cell vertices. Accept it only if it
+    // is STRICTLY INTERIOR -- on the same side as the exact interior barycenter for every cell
+    // face (and off every face plane). This keeps the common case on a light explicit point;
+    // only thin/near-flat cells, where the double centroid can round to just outside (its fan
+    // tets would then overlap the neighbour), fall back to the exact point. Using `exact` as
+    // the reference is one orient3D per face -- no scan over the cell vertices.
+    double cx, cy, cz;
+    double sum_x = 0.0, sum_y = 0.0, sum_z = 0.0;
+    uint32_t np = 0;
+    for (const uint32_t v : vrts)
+        if (vertices[v]->getApproxXYZCoordinates(cx, cy, cz)) {
+            sum_x += cx;
+            sum_y += cy;
+            sum_z += cz;
+            np++;
+        }
+    explicitPoint3D* cand = new explicitPoint3D(sum_x / np, sum_y / np, sum_z / np);
+    bool interior = true;
+    for (uint64_t fi : cell.faces) {
+        vector<uint32_t> fv(3, UINT32_MAX);
+        list_faceVertices(faces[fi], fv);
+        const genericPoint& fa = *vertices[fv[0]];
+        const genericPoint& fb = *vertices[fv[1]];
+        const genericPoint& fc = *vertices[fv[2]];
+        const int sc = genericPoint::orient3D(fa, fb, fc, *cand);
+        const int sr = genericPoint::orient3D(fa, fb, fc, *exact);
+        if (sc == 0 || (sc < 0) != (sr < 0)) {
+            interior = false;
+            break;
+        }
+    }
+    if (interior) {
+        delete exact;
+        return cand;
+    }
+    delete cand;
+#endif
+
+    // Exact barycenter (always with VOLUMEREMESHER_BARY_ALWAYS_EXACT; otherwise only for the
+    // thin cells whose cheap centroid was rejected above).
+    return exact;
+}
+
+// Thread-safe list_cellVertices: same result and same order as list_cellVertices, but using
+// local dedup containers instead of the shared edge_visit/vrts_visit scratch, so it is safe to
+// call concurrently for different cells.
+void BSPcomplex::list_cellVertices_ts(const BSPcell& cell, vector<uint32_t>& cell_vrts) const
+{
+    std::unordered_set<uint64_t> edge_seen;
+    std::vector<uint64_t> cell_edges;
+    for (uint64_t f : cell.faces)
+        for (uint64_t e : faces[f].edges)
+            if (edge_seen.insert(e).second) cell_edges.push_back(e);
+
+    cell_vrts.clear();
+    std::unordered_set<uint32_t> vrt_seen;
+    for (uint64_t e : cell_edges) {
+        const uint32_t a = edges[e].vertices[0], b = edges[e].vertices[1];
+        if (vrt_seen.insert(a).second) cell_vrts.push_back(a);
+        if (vrt_seen.insert(b).second) cell_vrts.push_back(b);
+    }
 }
 
 //
@@ -2671,6 +2685,35 @@ bool BSPcomplex::cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v)
 
 //
 //
+// Run fn over blocks of [0,n) on std::thread::hardware_concurrency() threads, dynamically
+// scheduled (atomic block-fetch) so uneven per-item cost stays balanced. Falls back to a
+// serial call for small n or a single hardware thread. Compiling with VOLUMEREMESHER_SERIAL_TET
+// (CMake: -DVOLUMEREMESHER_PARALLEL_TETRAHEDRALIZATION=OFF) forces the serial path everywhere.
+template <class F>
+static void parallel_blocks(uint64_t n, F&& fn)
+{
+#ifdef VOLUMEREMESHER_SERIAL_TET
+    fn(uint64_t(0), n);
+#else
+    unsigned nthreads = std::thread::hardware_concurrency();
+    if (nthreads == 0) nthreads = 1;
+    if (nthreads == 1 || n < 512) {
+        fn(uint64_t(0), n);
+        return;
+    }
+    std::atomic<uint64_t> next{0};
+    const uint64_t block = 64;
+    auto runner = [&]() {
+        uint64_t i;
+        while ((i = next.fetch_add(block)) < n) fn(i, std::min(n, i + block));
+    };
+    std::vector<std::thread> pool;
+    pool.reserve(nthreads);
+    for (unsigned t = 0; t < nthreads; t++) pool.emplace_back(runner);
+    for (std::thread& t : pool) t.join();
+#endif
+}
+
 void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
 {
     uint64_t tet_num = 0; // total number of tetrahedra in which the cell will
@@ -2688,37 +2731,55 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
     // - a cell vertex for decomposition type 1,
     // - the cell baricenter for decomposition type 2.
 
-    for (uint64_t cell_i = 0; cell_i < cells.size(); cell_i++) {
-        BSPcell& cell = cells[cell_i];
-        if (!keep_all_cells && cell.place != INTERNAL_A) continue;
+    // Per-cell decomposition decision. The heavy part -- the barycenter interior test in
+    // computeBaricenterPoint -- lives here, and every cell is independent, so run it in
+    // parallel: each thread writes only its own cells' slots and, for a barycenter (type-2)
+    // cell, creates the star-center point WITHOUT adding it to `vertices`. The points are then
+    // appended serially in cell order below, so vertex indices -- and the whole output --
+    // match a serial run exactly. (list_cellVertices_ts avoids the shared visit scratch.)
+    std::vector<uint64_t> tet_count(cells.size(), 0);
+    std::vector<genericPoint*> bary_point(cells.size(), nullptr);
 
-        // If cell has more than 4 faces -> chose between types 1 and 2
-        if (cell.faces.size() > 4) {
-            uint64_t num_cellEdges = UINT64_MAX;
-            uint32_t num_cellVrts = count_cellVertices(cell, &num_cellEdges);
-            vector<uint32_t> cell_vrts(num_cellVrts, UINT32_MAX);
-            list_cellVertices(cell, num_cellEdges, cell_vrts);
+    parallel_blocks(cells.size(), [&](uint64_t lo, uint64_t hi) {
+        vector<uint32_t> cell_vrts;
+        for (uint64_t cell_i = lo; cell_i < hi; cell_i++) {
+            BSPcell& cell = cells[cell_i];
+            if (!keep_all_cells && cell.place != INTERNAL_A) continue;
 
-            // Check if cell is tetrahedralizable from a vertex.
-            bool needs_barycenter = true;
-            for (uint32_t cv = 0; cv < cell_vrts.size(); cv++)
-                if (cell_is_tetrahedrizable_from_v(cell, cell_vrts[cv])) {
-                    decomposition_type[cell_i] = 1;
-                    decomposition_vrt[cell_i] = cell_vrts[cv];
-                    tet_num += cell.faces.size() - count_cellFaces_inc_cellVrt(cell, cell_vrts[cv]);
-                    needs_barycenter = false;
-                    break;
+            // If cell has more than 4 faces -> chose between types 1 and 2
+            if (cell.faces.size() > 4) {
+                list_cellVertices_ts(cell, cell_vrts);
+
+                // Check if cell is tetrahedralizable from a vertex.
+                bool needs_barycenter = true;
+                for (uint32_t v : cell_vrts)
+                    if (cell_is_tetrahedrizable_from_v(cell, v)) {
+                        decomposition_type[cell_i] = 1;
+                        decomposition_vrt[cell_i] = v;
+                        tet_count[cell_i] = cell.faces.size() - count_cellFaces_inc_cellVrt(cell, v);
+                        needs_barycenter = false;
+                        break;
+                    }
+
+                if (needs_barycenter) { // Cell needs its baricenter
+                    decomposition_type[cell_i] = 2;
+                    bary_point[cell_i] = computeBaricenterPoint(cell_vrts, cell);
+                    tet_count[cell_i] = cell.faces.size();
                 }
+            } else
+                tet_count[cell_i] = 1; // The cell is a tet (type 0).
+        }
+    });
 
-            if (needs_barycenter) { // Cell need baricenter
-                decomposition_type[cell_i] = 2;
-                computeBaricenter(cell_vrts, cell);
-                decomposition_vrt[cell_i] = ((uint32_t)vertices.size() - 1);
-                tet_num += cell.faces.size();
-            }
-
-        } else
-            tet_num++; // The cell is a tet.
+    // Serial merge: append the barycenter points in cell order (so their indices are identical
+    // to a serial run) and total the tet count.
+    for (uint64_t cell_i = 0; cell_i < cells.size(); cell_i++) {
+        if (decomposition_type[cell_i] == 2) {
+            vertices.push_back(bary_point[cell_i]);
+            vrts_visit.push_back(0);
+            decomposition_vrt[cell_i] = (uint32_t)vertices.size() - 1;
+        }
+        tet_num += tet_count[cell_i];
     }
 
     final_tets.reserve(tet_num * 4);
@@ -2767,13 +2828,19 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
     // degenerate tet (orient3D == 0) cannot be fixed by a swap and is left as-is;
     // the triangulation above is meant to prevent those, and the assertion in
     // saveMesh will flag any that slip through rather than silently emitting them.
-    for (uint32_t t = 0; t < final_tets.size(); t += 4)
-        if (genericPoint::orient3D(
-                *vertices[final_tets[t]],
-                *vertices[final_tets[t + 1]],
-                *vertices[final_tets[t + 2]],
-                *vertices[final_tets[t + 3]]) < 0)
-            std::swap(final_tets[t + 2], final_tets[t + 3]);
+    // Each tet is independent (orient3D reads only, the swap touches only this tet's slots),
+    // so flip in parallel.
+    parallel_blocks(final_tets.size() / 4, [&](uint64_t lo, uint64_t hi) {
+        for (uint64_t k = lo; k < hi; k++) {
+            const uint32_t t = (uint32_t)(k * 4);
+            if (genericPoint::orient3D(
+                    *vertices[final_tets[t]],
+                    *vertices[final_tets[t + 1]],
+                    *vertices[final_tets[t + 2]],
+                    *vertices[final_tets[t + 3]]) < 0)
+                std::swap(final_tets[t + 2], final_tets[t + 3]);
+        }
+    });
 
     // Tag output tet faces that lie on the input surface with their input triangles.
     // Done after the winding-flip so local-face indices match the emitted vertex order.
