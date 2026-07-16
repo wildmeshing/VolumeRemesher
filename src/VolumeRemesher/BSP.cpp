@@ -2523,6 +2523,7 @@ void BSPcomplex::triangulateFace(uint64_t face_ind)
 // plane.
 void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& cell)
 {
+    // Cheap candidate: the approximate (double) centroid of all cell vertices.
     double cx, cy, cz;
     double sum_x = 0.0, sum_y = 0.0, sum_z = 0.0;
     uint32_t np = 0;
@@ -2535,31 +2536,50 @@ void BSPcomplex::computeBaricenter(const vector<uint32_t>& vrts, const BSPcell& 
         }
     explicitPoint3D* cand = new explicitPoint3D(sum_x / np, sum_y / np, sum_z / np);
 
-    // Verify no fan tet (face, candidate) is degenerate.
-    bool ok = true;
+    // Accept the cheap centroid only if it is STRICTLY INTERIOR to the cell: for every cell
+    // face it must lie off the face plane and on the cell's interior side. The cell is convex,
+    // so all its vertices lie on one closed side of each face -- the interior side is the sign
+    // of any cell vertex that is off that face's plane. (The previous test only rejected an
+    // exactly-degenerate fan, orient3D == 0, which let a centroid that fell just outside a thin
+    // near-flat convex cell through; its fan tets then land on the wrong side and overlap the
+    // neighbour, giving orientation-inconsistent output.) The exact interior barycenter below
+    // is built ONLY when this cheap centroid is rejected.
+    bool interior = true;
     for (uint64_t fi : cell.faces) {
         vector<uint32_t> fv(3, UINT32_MAX);
         list_faceVertices(faces[fi], fv);
-        if (genericPoint::orient3D(*vertices[fv[0]], *vertices[fv[1]], *vertices[fv[2]], *cand) ==
-            0) {
-            ok = false;
+        const genericPoint& fa = *vertices[fv[0]];
+        const genericPoint& fb = *vertices[fv[1]];
+        const genericPoint& fc = *vertices[fv[2]];
+        const int sc = genericPoint::orient3D(fa, fb, fc, *cand);
+        if (sc == 0) {
+            interior = false;
+            break;
+        }
+        int si = 0; // interior-side sign: the side of any cell vertex off this face's plane
+        for (const uint32_t w : vrts) {
+            si = genericPoint::orient3D(fa, fb, fc, *vertices[w]);
+            if (si != 0) break;
+        }
+        if ((sc < 0) != (si < 0)) {
+            interior = false;
             break;
         }
     }
-    if (ok) {
+    if (interior) {
         vertices.push_back(cand);
         vrts_visit.push_back(0);
         return;
     }
     delete cand;
 
-    // Exact fallback: barycenter of four affinely-independent (non-coplanar) cell
-    // vertices. Build the quadruple greedily -- add a vertex only if it is
-    // independent of the ones already chosen: the 2nd must be distinct (all cell
-    // vertices are), the 3rd not collinear with the first two, the 4th not coplanar
-    // with the first three. A non-degenerate (positive-volume) cell always has such
-    // a quadruple. quad[] never holds an out-of-range index, so the predicates below
-    // only ever see already-selected points.
+    // Exact fallback: barycenter of four affinely-independent (non-coplanar) cell vertices.
+    // It is strictly inside the tetrahedron of those four vertices, which (the cell being
+    // convex) lies inside the cell -- so it is strictly interior and yields a valid star
+    // decomposition. Built greedily: add a vertex only if independent of the ones already
+    // chosen (2nd distinct, 3rd not collinear, 4th not coplanar). A non-degenerate
+    // (positive-volume) cell always has such a quadruple; quad[] never holds an out-of-range
+    // index, so the predicates below only see already-selected points.
     const uint32_t n = (uint32_t)vrts.size();
     uint32_t quad[4];
     uint32_t nq = 0;
