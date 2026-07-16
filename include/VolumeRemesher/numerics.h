@@ -67,7 +67,11 @@
 #include <gmpxx.h>
 #endif
 
-#if INTPTR_MAX == INT64_MAX
+// VR_DISABLE_SIMD is set by CMake when the SIMD probe (cmake/test_simd.cpp) finds neither SSE2
+// nor NEON; it forces the scalar interval_number path (the SIMD and scalar paths are verified to
+// produce byte-identical output). On x86 SSE2/AVX2 is selected from the compiler's macros; on ARM
+// the NEON branch pulls in SIMDe to emulate the x86 AVX2/SSE2 intrinsics.
+#if (INTPTR_MAX == INT64_MAX) && !defined(VR_DISABLE_SIMD)
 #ifdef __SSE2__
 #define USE_SIMD_INSTRUCTIONS
 #endif
