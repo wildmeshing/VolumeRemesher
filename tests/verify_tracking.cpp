@@ -18,6 +18,8 @@
 
 #include <VolumeRemesher/numerics.h>
 
+#include "tet_orientation.h"
+
 #include <array>
 #include <cctype>
 #include <cstdio>
@@ -186,6 +188,11 @@ int main(int argc, char** argv)
             tets.push_back({a, b, c, d});
         }
     }
+
+    // Orientation / manifoldness of the tetrahedralization (combinatorial, indices only):
+    // every internal face must be shared by exactly two tets with OPPOSITE winding, else the
+    // tets overlap. Independent of the surface/edge/point tracking checked below.
+    const vrtest::OrientationResult orient = vrtest::check_tet_orientation(tets);
 
     // exact output vertex coordinates (.rational), same order as the .tet. The lines are
     // read as strings and parsed to exact rationals only on first access (get_out): a big
@@ -507,7 +514,13 @@ int main(int argc, char** argv)
         printf("  points    (each input point == an output vertex):      %s (%llu bad of %zu)\n",
             point_fail ? "FAIL" : "ok", (unsigned long long)point_fail, n_in_points);
 
-    bool ok = !sound_fail && !edge_fail && !point_fail && (!strict || coverage_ok);
+    printf("  orient    (each internal face shared by 2 tets, opposite winding): %s "
+           "(boundary=%llu internal=%llu same_winding=%llu over_shared=%llu)\n",
+        orient.ok ? "ok" : "FAIL", (unsigned long long)orient.boundary,
+        (unsigned long long)orient.internal, (unsigned long long)orient.same_winding,
+        (unsigned long long)orient.over_shared);
+
+    bool ok = !sound_fail && !edge_fail && !point_fail && orient.ok && (!strict || coverage_ok);
     printf("%s\n", ok ? "TRACKING OK" : "TRACKING FAILED");
     return ok ? 0 : 1;
 }

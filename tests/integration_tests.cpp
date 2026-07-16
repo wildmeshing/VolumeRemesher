@@ -15,6 +15,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "sha256.h"
+#include "tet_orientation.h"
 
 #include <array>
 #include <cstdint>
@@ -91,6 +92,14 @@ std::string run_and_hash(const std::string& model, const std::string& mode) {
 
     const fs::path out = work / output_for(mode);
     std::string digest = fs::exists(out) ? vrtest::sha256_file(out.string()) : std::string();
+    // Tetrahedralization output must be a valid simplicial complex: no overlapping /
+    // inconsistently-oriented tets. Combinatorial, so cheap even on the big models.
+    if (mode == "tet" && fs::exists(out)) {
+        const vrtest::OrientationResult orient = vrtest::check_tet_orientation_file(out.string());
+        INFO("orientation " << model << ": same_winding=" << orient.same_winding
+                            << " over_shared=" << orient.over_shared << " (" << orient.error << ")");
+        CHECK(orient.ok);
+    }
     fs::remove_all(work, ec);
     return digest;
 }
