@@ -30,6 +30,8 @@ set (SOURCES
     src/VolumeRemesher/inOutPartition.cpp
 )
 
+# Does this target have SIMD (x86 SSE2/AVX2, or ARM NEON on which numerics.h emulates them via
+# SIMDe)? cmake/test_simd.cpp accepts both; it fails only when neither is present.
 try_compile(HAS_SIMD_INSTRUCTIONS ${CMAKE_BINARY_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_simd.cpp")
 
 
@@ -39,8 +41,9 @@ add_library(${PROJECT_NAME}_lib
 )
 
 
-if(NOT ${HAS_SIMD_INSTRUCTIONS})
-	MESSAGE(WARNING "No simd supported")
+if(NOT HAS_SIMD_INSTRUCTIONS)
+	message(WARNING "No SIMD (SSE2/NEON) available on this target; using the scalar (slower) "
+		"interval arithmetic. Output is unchanged.")
 	target_compile_definitions(${PROJECT_NAME}_lib PUBLIC VR_DISABLE_SIMD)
 endif()
 
