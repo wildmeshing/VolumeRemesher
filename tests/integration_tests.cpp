@@ -406,13 +406,20 @@ TEST_CASE("integration: -t inserted edges and points are tracked exactly",
 #ifdef NDEBUG
 TEST_CASE("integration: -t all input combinations (surface/edges/points) tracked exactly",
     "[integration][tracking][large]") {
-    const uint32_t N = 10000;
+    // 1000 edges and 1000 points. This used to be 10000, which produced ~4M tets and several
+    // hundred MB of output per combo (seven combos, each generated then verified in exact
+    // rationals). That made the test both very slow and flaky: under concurrent load the
+    // generator would occasionally fail to produce a complete volume.tet, surfacing as
+    // "truncated .tet tets" or an empty verifier log. A tenth of the size exercises exactly the
+    // same code paths -- every combination of surface/edges/points, with the same exact checks --
+    // in a fraction of the time and memory.
+    const uint32_t N = 1000;
     const fs::path surface = fs::path(VRTEST_MODELS_DIR) / "cube_subdiv.off";
     const fs::path dir = fs::temp_directory_path() / "vrcombo_inputs";
     std::error_code ec;
     fs::create_directories(dir, ec);
-    const fs::path edges = dir / "edges10k.off";
-    const fs::path points = dir / "points10k.off";
+    const fs::path edges = dir / "random_edges.off";
+    const fs::path points = dir / "random_points.off";
     write_random_edges(edges, N, 12345);
     write_random_points(points, N, 67890);
 
