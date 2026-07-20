@@ -5,11 +5,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <VolumeRemesher/2d/delaunay2d.h>
 #include <VolumeRemesher/2d/predicates2d.h>
 #include <VolumeRemesher/numerics.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 using vol_rem::bigrational;
@@ -35,6 +38,8 @@ struct Rnd
     // Small integers keep the exact predicates in their cheap filter path while still producing
     // plenty of exactly-degenerate configurations (collinear, cocircular).
     double coord(int range) { return double(int64_t(next() % uint64_t(2 * range)) - range); }
+    // Uniform in [0,1) with full double precision: almost surely general position.
+    double unit() { return double(next() >> 11) * (1.0 / 9007199254740992.0); }
 };
 
 // --- exact reference determinants, computed independently in bigrational -------------------
@@ -226,5 +231,269 @@ TEST_CASE("2d predicates: in_circle_2d_SOS is antisymmetric under argument permu
             INFO("permutation " << q[0] << q[1] << q[2] << q[3] << (even ? " even" : " odd"));
             REQUIRE(got == (even ? base : Sign(-base)));
         }
+    }
+}
+
+// ==============================================================================================
+// Delaunay2d
+// ==============================================================================================
+
+namespace {
+
+using vol_rem::vr2d::Delaunay2d;
+using vol_rem::vr2d::index_t;
+
+struct DelaunayReport
+{
+    bool combinatorics_ok = false;
+    bool empty_circle_ok = false;
+    bool euler_ok = false;
+    bool all_vertices_used = false;
+    index_t nb_finite = 0;
+    index_t nb_virtual = 0;
+    std::string detail;
+
+    bool ok() const
+    {
+        return combinatorics_ok && empty_circle_ok && euler_ok && all_vertices_used;
+    }
+};
+
+// Full exact validation of a computed triangulation. This is the "self-check" half of test (a):
+// it is strictly stronger than matching geogram, because for points in general position the
+// Delaunay triangulation is UNIQUE -- so anything passing these checks IS the triangulation
+// geogram would produce, whatever route it took to get there.
+DelaunayReport validate_delaunay(const Delaunay2d& D, index_t nb_pts)
+{
+    DelaunayReport r;
+    r.combinatorics_ok = D.check_combinatorics();
+    if (!r.combinatorics_ok) r.detail = "combinatorics";
+
+    const index_t nt = D.nb_triangles();
+    r.nb_finite = D.nb_finite_triangles();
+    r.nb_virtual = nt - r.nb_finite;
+
+    // --- exact empty-circumcircle test ---
+    // A triangulation is globally Delaunay iff it is LOCALLY Delaunay across every internal edge:
+    // for adjacent finite triangles t and t2, the vertex of t2 opposite the shared edge must not
+    // lie strictly inside t's circumcircle. Checked with the exact predicate, no tolerance.
+    r.empty_circle_ok = true;
+    for (index_t t = 0; t < nt && r.empty_circle_ok; t++) {
+        if (!D.triangle_is_finite(t)) continue;
+        const double* a = D.vertex_ptr(D.triangle_vertex(t, 0));
+        const double* b = D.vertex_ptr(D.triangle_vertex(t, 1));
+        const double* c = D.vertex_ptr(D.triangle_vertex(t, 2));
+        for (index_t le = 0; le < 3; le++) {
+            const index_t t2 = D.triangle_adjacent(t, le);
+            if (t2 == Delaunay2d::NO_INDEX || !D.triangle_is_finite(t2)) continue;
+            // vertex of t2 not shared with t
+            index_t opp = Delaunay2d::NO_INDEX;
+            for (index_t k = 0; k < 3; k++) {
+                const index_t v = D.triangle_vertex(t2, k);
+                if (v != D.triangle_vertex(t, 0) && v != D.triangle_vertex(t, 1) &&
+                    v != D.triangle_vertex(t, 2)) {
+                    opp = v;
+                    break;
+                }
+            }
+            if (opp == Delaunay2d::NO_INDEX) continue;
+            if (vol_rem::incircle(a[0], a[1], b[0], b[1], c[0], c[1],
+                                  D.vertex_ptr(opp)[0], D.vertex_ptr(opp)[1]) > 0) {
+                r.empty_circle_ok = false;
+                r.detail = "not locally Delaunay at triangle " + std::to_string(t);
+                break;
+            }
+        }
+    }
+
+    // --- Euler ---
+    // A triangulation of n points with h of them on the convex hull has exactly 2n - 2 - h
+    // triangles, and there is one virtual triangle per hull edge, i.e. per hull vertex.
+    const index_t h = r.nb_virtual;
+    r.euler_ok = (h >= 3) && (r.nb_finite + 2 + h == 2 * nb_pts);
+    if (!r.euler_ok) {
+        r.detail = "euler: finite=" + std::to_string(r.nb_finite) + " hull=" + std::to_string(h) +
+                   " n=" + std::to_string(nb_pts);
+    }
+
+    // --- every input point is a vertex of some triangle ---
+    std::vector<bool> used(nb_pts, false);
+    for (index_t t = 0; t < nt; t++) {
+        for (index_t k = 0; k < 3; k++) {
+            const index_t v = D.triangle_vertex(t, k);
+            if (v != Delaunay2d::NO_INDEX) used[v] = true;
+        }
+    }
+    r.all_vertices_used = std::all_of(used.begin(), used.end(), [](bool b) { return b; });
+    if (!r.all_vertices_used) r.detail = "some input vertex is in no triangle";
+
+    return r;
+}
+
+} // namespace
+
+TEST_CASE("2d delaunay: hilbert_order is a permutation", "[2d][delaunay]")
+{
+    Rnd rnd(0x51D5077u);
+    for (const index_t n : {1u, 2u, 3u, 17u, 500u}) {
+        std::vector<double> pts(2 * n);
+        for (auto& c : pts) c = rnd.unit();
+        std::vector<index_t> order;
+        Delaunay2d::hilbert_order(n, pts.data(), order);
+        REQUIRE(order.size() == n);
+        std::vector<index_t> sorted = order;
+        std::sort(sorted.begin(), sorted.end());
+        for (index_t i = 0; i < n; i++) REQUIRE(sorted[i] == i);
+    }
+
+    // Degenerate bounding boxes must not divide by zero or collapse the order.
+    {
+        const index_t n = 8;
+        std::vector<double> pts(2 * n);
+        for (index_t i = 0; i < n; i++) {
+            pts[2 * i] = 3.0; // all points on a vertical line
+            pts[2 * i + 1] = double(i);
+        }
+        std::vector<index_t> order;
+        Delaunay2d::hilbert_order(n, pts.data(), order);
+        std::vector<index_t> sorted = order;
+        std::sort(sorted.begin(), sorted.end());
+        for (index_t i = 0; i < n; i++) REQUIRE(sorted[i] == i);
+    }
+}
+
+TEST_CASE("2d delaunay: degenerate inputs", "[2d][delaunay]")
+{
+    SECTION("fewer than three points")
+    {
+        const double pts[4] = {0.0, 0.0, 1.0, 1.0};
+        Delaunay2d D;
+        CHECK_FALSE(D.set_vertices(2, pts));
+    }
+
+    SECTION("all points collinear")
+    {
+        std::vector<double> pts;
+        for (int i = 0; i < 10; i++) {
+            pts.push_back(double(i));
+            pts.push_back(2.0 * double(i)); // exactly on y = 2x
+        }
+        Delaunay2d D;
+        CHECK_FALSE(D.set_vertices(10, pts.data()));
+    }
+
+    SECTION("minimal triangle")
+    {
+        const double pts[6] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0};
+        Delaunay2d D;
+        REQUIRE(D.set_vertices(3, pts));
+        const DelaunayReport r = validate_delaunay(D, 3);
+        INFO(r.detail);
+        CHECK(r.ok());
+        CHECK(r.nb_finite == 1);
+        CHECK(r.nb_virtual == 3);
+    }
+}
+
+TEST_CASE("2d delaunay: random point sets are exactly Delaunay", "[2d][delaunay]")
+{
+    Rnd rnd(0xD3134Eu);
+    for (const index_t n : {4u, 5u, 10u, 50u, 200u, 1000u}) {
+        std::vector<double> pts(2 * n);
+        for (auto& c : pts) c = rnd.unit();
+
+        Delaunay2d D;
+        REQUIRE(D.set_vertices(n, pts.data()));
+        const DelaunayReport r = validate_delaunay(D, n);
+        INFO("n=" << n << " " << r.detail);
+        CHECK(r.combinatorics_ok);
+        CHECK(r.empty_circle_ok);
+        CHECK(r.euler_ok);
+        CHECK(r.all_vertices_used);
+    }
+}
+
+// Cocircular and collinear configurations are where the SOS layer earns its keep: a plain exact
+// incircle returns 0 here and Bowyer-Watson would have no consistent answer.
+TEST_CASE("2d delaunay: heavily degenerate point sets", "[2d][delaunay]")
+{
+    SECTION("regular grid (every unit cell is a cocircular quadruple)")
+    {
+        const index_t k = 12;
+        std::vector<double> pts;
+        for (index_t i = 0; i < k; i++)
+            for (index_t j = 0; j < k; j++) {
+                pts.push_back(double(i));
+                pts.push_back(double(j));
+            }
+        const index_t n = k * k;
+        Delaunay2d D;
+        REQUIRE(D.set_vertices(n, pts.data()));
+        const DelaunayReport r = validate_delaunay(D, n);
+        INFO(r.detail);
+        CHECK(r.combinatorics_ok);
+        CHECK(r.empty_circle_ok);
+        CHECK(r.euler_ok);
+        CHECK(r.all_vertices_used);
+    }
+
+    SECTION("points exactly on a circle (all n cocircular)")
+    {
+        // Pythagorean points on the radius-1105 circle, plus multiples, all exact integers.
+        const int pyth[][2] = {{1105, 0},  {1104, 47},  {1073, 264}, {1052, 340}, {1020, 425},
+                               {943, 576}, {884, 663},  {816, 745},  {780, 782},  {744, 817}};
+        std::vector<double> pts;
+        for (const auto& p : pyth) {
+            for (const int sx : {1, -1})
+                for (const int sy : {1, -1}) {
+                    pts.push_back(double(sx * p[0]));
+                    pts.push_back(double(sy * p[1]));
+                }
+        }
+        // dedup exact duplicates (points with a zero coordinate appear twice)
+        std::vector<std::array<double, 2>> uniq;
+        for (size_t i = 0; i + 1 < pts.size(); i += 2) {
+            const std::array<double, 2> q = {pts[i], pts[i + 1]};
+            if (std::find(uniq.begin(), uniq.end(), q) == uniq.end()) uniq.push_back(q);
+        }
+        std::vector<double> flat;
+        for (const auto& q : uniq) {
+            flat.push_back(q[0]);
+            flat.push_back(q[1]);
+        }
+        const index_t n = index_t(uniq.size());
+
+        Delaunay2d D;
+        REQUIRE(D.set_vertices(n, flat.data()));
+        const DelaunayReport r = validate_delaunay(D, n);
+        INFO(r.detail);
+        CHECK(r.combinatorics_ok);
+        CHECK(r.empty_circle_ok);
+        CHECK(r.euler_ok);
+        CHECK(r.all_vertices_used);
+        // Every point is on the hull, so every triangle is virtual except the fan.
+        CHECK(r.nb_virtual == n);
+    }
+
+    SECTION("many collinear points plus two off-line points")
+    {
+        std::vector<double> pts;
+        for (int i = 0; i < 40; i++) {
+            pts.push_back(double(i));
+            pts.push_back(0.0);
+        }
+        pts.push_back(20.0);
+        pts.push_back(7.0);
+        pts.push_back(20.0);
+        pts.push_back(-7.0);
+        const index_t n = 42;
+        Delaunay2d D;
+        REQUIRE(D.set_vertices(n, pts.data()));
+        const DelaunayReport r = validate_delaunay(D, n);
+        INFO(r.detail);
+        CHECK(r.combinatorics_ok);
+        CHECK(r.empty_circle_ok);
+        CHECK(r.euler_ok);
+        CHECK(r.all_vertices_used);
     }
 }
