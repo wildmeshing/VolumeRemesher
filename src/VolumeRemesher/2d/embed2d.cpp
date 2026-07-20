@@ -78,8 +78,7 @@ bool embed_seg_in_tri_mesh(const std::vector<double>& seg_vrt_coords,
         }
         // The stored segment is oriented by its first input occurrence; if THIS input segment
         // was given the other way round, reverse so the list runs from its own first endpoint.
-        const uint32_t first = A.input_point_vertex[segment_indexes[2 * i]];
-        if (first != A.seg[s][0]) {
+        if (A.input_seg_v0[i] != A.seg[s][0]) {
             std::reverse(dst.begin(), dst.end());
             for (auto& e : dst) std::swap(e[1], e[2]);
         }

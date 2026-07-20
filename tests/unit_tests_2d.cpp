@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <unordered_set>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -667,6 +668,26 @@ R2 exact_of(const Arrangement2D& A, uint32_t v)
 // -- both endpoints reached, no gap, no overlap.
 std::string check_provenance(const Arrangement2D& A)
 {
+    // Every recorded sub-edge must still BE an edge of the output triangulation. Checking only
+    // the geometry (below) is not enough: a pair can stay geometrically valid on the segment
+    // while no longer bounding any triangle, in which case the writer silently drops it and the
+    // emitted provenance has a hole.
+    std::unordered_set<uint64_t> mesh_edges;
+    for (uint32_t t = 0; t < A.num_triangles(); t++) {
+        if (!A.tri_is_finite(t)) continue;
+        for (uint32_t le = 0; le < 3; le++) {
+            mesh_edges.insert(Arrangement2D::ekey(A.tri_node[3 * t + (le + 1) % 3],
+                                                  A.tri_node[3 * t + (le + 2) % 3]));
+        }
+    }
+    for (uint32_t s = 0; s < A.seg.size(); s++) {
+        for (uint32_t k = A.seg_head[s]; k != INVALID; k = A.subedges[k].next) {
+            if (!mesh_edges.count(Arrangement2D::ekey(A.subedges[k].v0, A.subedges[k].v1)))
+                return "segment " + std::to_string(s) +
+                       ": recorded sub-edge is not an edge of the output triangulation";
+        }
+    }
+
     for (uint32_t s = 0; s < A.seg.size(); s++) {
         const R2 P0 = exact_of(A, A.seg[s][0]);
         const R2 P1 = exact_of(A, A.seg[s][1]);
@@ -882,4 +903,62 @@ TEST_CASE("2d arrangement: random segments on a small integer lattice", "[2d][ar
             check_all(c, s, "lattice soup");
         }
     }
+}
+
+// ==============================================================================================
+// KNOWN-FAILING regression cases
+//
+// These were found by a stress sweep over inputs with far more overlap and concurrency than the
+// hand-built cases above, and they expose two genuine defects in the provenance tracking. The
+// TRIANGULATION is correct in both -- structurally valid, exactly positively oriented, orientable
+// and non-overlapping -- so the bug is confined to which output edges get attributed to which
+// input segment.
+//
+//   1. collinear overlap  -> "output edge outside segment or degenerate": a sub-edge is recorded
+//      for a segment that does not actually contain it.
+//   2. dense concurrency  -> "output edges do not reach both endpoints": the recorded sub-edges
+//      leave part of the segment uncovered.
+//
+// The smaller hand-built cases pass, so the defects only surface once many degenerate
+// configurations interact; the sweep needed ~160 random segments on a coarse integer lattice, or
+// ~480 mutually overlapping collinear segments, before one tripped.
+//
+// Both are cheap (well under 0.1 s each). They are expected to FAIL until the defects are fixed.
+// ==============================================================================================
+
+TEST_CASE("2d arrangement: heavy collinear overlap (KNOWN FAILURE)", "[2d][arrangement][known-bug]")
+{
+    // 480 collinear segments spread over 20 horizontal lines: 24 mutually overlapping segments
+    // per line, no crossings at all (zero intersection points are constructed).
+    Rnd rnd(0xFEEDu);
+    std::vector<double> c;
+    std::vector<uint32_t> idx;
+    for (int i = 0; i < 480; i++) {
+        const double y = double(i % 20);
+        const double s = rnd.coord(20);
+        const double e = s + 1 + rnd.coord(19);
+        c.push_back(s);
+        c.push_back(y);
+        c.push_back(e);
+        c.push_back(y);
+        idx.push_back(uint32_t(2 * i));
+        idx.push_back(uint32_t(2 * i) + 1);
+    }
+    check_all(c, idx, "heavy collinear overlap");
+}
+
+TEST_CASE("2d arrangement: dense lattice concurrency (KNOWN FAILURE)",
+          "[2d][arrangement][known-bug]")
+{
+    // 160 random segments on a coarse integer lattice: heavy concurrency and many exactly
+    // collinear configurations, ~2600 intersection points.
+    Rnd rnd(0x1A77u + 500u);
+    std::vector<double> c;
+    std::vector<uint32_t> idx;
+    for (int i = 0; i < 160; i++) {
+        for (int k = 0; k < 4; k++) c.push_back(rnd.coord(64));
+        idx.push_back(uint32_t(2 * i));
+        idx.push_back(uint32_t(2 * i) + 1);
+    }
+    check_all(c, idx, "dense lattice concurrency");
 }

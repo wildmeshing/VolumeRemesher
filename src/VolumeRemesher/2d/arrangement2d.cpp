@@ -581,6 +581,7 @@ bool build_arrangement(const std::vector<double>& seg_coords,
     // --- Phase 0c: segments ---------------------------------------------------------------------
     const uint32_t n_seg_in = uint32_t(seg_indexes.size() / 2);
     A.input_to_seg.assign(n_seg_in, INVALID);
+    A.input_seg_v0.assign(n_seg_in, INVALID);
     {
         // Group duplicates. Sorting by (min,max,id) is a strict total order.
         std::vector<uint32_t> sorder;
@@ -590,7 +591,10 @@ bool build_arrangement(const std::vector<double>& seg_coords,
             const uint32_t v0 = A.input_point_vertex[seg_indexes[2 * i]];
             const uint32_t v1 = A.input_point_vertex[seg_indexes[2 * i + 1]];
             key[i] = {std::min(v0, v1), std::max(v0, v1)};
-            if (v0 != v1) sorder.push_back(i); // drop zero-length segments
+            if (v0 != v1) {
+                sorder.push_back(i); // zero-length segments are dropped
+                A.input_seg_v0[i] = v0;
+            }
         }
         std::sort(sorder.begin(), sorder.end(), [&](uint32_t p, uint32_t q) {
             if (key[p] != key[q]) return key[p] < key[q];

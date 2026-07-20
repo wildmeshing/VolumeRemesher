@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <unordered_map>
@@ -175,6 +176,14 @@ bool write_arrangement(const std::string& base, const Arrangement2D& A, bool exp
                 const auto it = edge_tri.find(Arrangement2D::ekey(v0, v1));
                 if (it == edge_tri.end()) continue;
                 out.push_back({it->second, vmap[v0], vmap[v1]});
+            }
+            // The stored segment is oriented by its FIRST input occurrence. If this input
+            // segment was given the other way round, reverse so the list runs from its own first
+            // endpoint -- otherwise each emitted (v0,v1) is backwards and a consumer
+            // parameterising along the segment sees t0 > t1. (embed2d.cpp does the same.)
+            if (A.input_seg_v0[i] != A.seg[s][0]) {
+                std::reverse(out.begin(), out.end());
+                for (auto& e : out) std::swap(e[1], e[2]);
             }
             pf << " " << out.size();
             for (const auto& e : out) pf << " " << e[0] << " " << e[1] << " " << e[2];

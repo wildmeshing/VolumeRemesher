@@ -104,6 +104,10 @@ struct Arrangement2D
     std::vector<std::array<uint32_t, 2>> seg;        // unique segments, as vertex-id pairs
     std::vector<std::vector<uint32_t>> seg_inputs;   // -> the input segment ids that map to each
     std::vector<uint32_t> input_to_seg;              // input segment id -> index in seg, or INVALID
+    // Per INPUT segment, the vertex id of ITS OWN first endpoint. seg[] is oriented by the first
+    // input occurrence, so a duplicate given the other way round needs its provenance reversed;
+    // this is what lets the writers do that. INVALID for dropped (zero-length) segments.
+    std::vector<uint32_t> input_seg_v0;
     std::vector<uint32_t> input_point_vertex;        // input point id -> vertex id
 
     // --- triangulation ------------------------------------------------------------------------
