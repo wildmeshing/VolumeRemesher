@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -495,5 +497,74 @@ TEST_CASE("2d delaunay: heavily degenerate point sets", "[2d][delaunay]")
         CHECK(r.empty_circle_ok);
         CHECK(r.euler_ok);
         CHECK(r.all_vertices_used);
+    }
+}
+
+// Cross-check against real geogram. See tests/data/2d/delaunay_ref/README.md for how the
+// reference files were produced and why they are stored rather than generated in CI.
+TEST_CASE("2d delaunay: matches geogram", "[2d][delaunay]")
+{
+    const char* names[] = {"random_00010", "random_00050", "random_00200", "random_01000",
+                           "random_05000"};
+
+    for (const char* name : names) {
+        DYNAMIC_SECTION(name)
+        {
+            const std::string path =
+                std::string(VRTEST_DATA_DIR) + "/2d/delaunay_ref/" + name + ".txt";
+            std::ifstream in(path);
+            REQUIRE(in.good());
+
+            std::vector<double> pts;
+            std::vector<std::array<uint32_t, 3>> want;
+            std::string tok;
+            while (in >> tok) {
+                if (tok[0] == '#') {
+                    std::getline(in, tok);
+                } else if (tok == "POINTS") {
+                    size_t n = 0;
+                    in >> n;
+                    pts.resize(2 * n);
+                    for (size_t i = 0; i < 2 * n; i++) {
+                        std::string s;
+                        in >> s;
+                        pts[i] = std::strtod(s.c_str(), nullptr); // %a round-trips exactly
+                    }
+                } else if (tok == "TRIANGLES") {
+                    size_t m = 0;
+                    in >> m;
+                    want.resize(m);
+                    for (size_t i = 0; i < m; i++) in >> want[i][0] >> want[i][1] >> want[i][2];
+                }
+            }
+            REQUIRE_FALSE(pts.empty());
+            REQUIRE_FALSE(want.empty());
+
+            const index_t n = index_t(pts.size() / 2);
+            Delaunay2d D;
+            REQUIRE(D.set_vertices(n, pts.data()));
+
+            // Same canonical form as the generator: smallest vertex first (winding preserved),
+            // then sort. Makes the comparison independent of triangle numbering.
+            std::vector<std::array<uint32_t, 3>> got;
+            got.reserve(D.nb_finite_triangles());
+            for (index_t t = 0; t < D.nb_triangles(); t++) {
+                if (!D.triangle_is_finite(t)) continue;
+                uint32_t v[3];
+                for (int k = 0; k < 3; k++) v[k] = D.triangle_vertex(t, index_t(k));
+                const int m = (v[0] < v[1]) ? ((v[0] < v[2]) ? 0 : 2) : ((v[1] < v[2]) ? 1 : 2);
+                got.push_back({v[m], v[(m + 1) % 3], v[(m + 2) % 3]});
+            }
+            std::sort(got.begin(), got.end());
+
+            INFO("geogram triangles: " << want.size() << ", ours: " << got.size());
+            REQUIRE(got.size() == want.size());
+            for (size_t i = 0; i < got.size(); i++) {
+                INFO("triangle " << i << ": got (" << got[i][0] << "," << got[i][1] << ","
+                                 << got[i][2] << ") want (" << want[i][0] << "," << want[i][1]
+                                 << "," << want[i][2] << ")");
+                REQUIRE(got[i] == want[i]);
+            }
+        }
     }
 }
