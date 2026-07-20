@@ -640,9 +640,16 @@ bool build_arrangement(const std::vector<double>& seg_coords,
     A.num_input_pts = uint32_t(A.coords.size() / 2);
 
     // --- Phase 0b: the four corners of the 10%-expanded bounding box ----------------------------
-    // Geogram's Delaunay2d surrounds the convex hull with virtual triangles. Placing the four
-    // corners first makes every input point strictly interior, so the segment walks never reach a
-    // virtual triangle and need no boundary special case.
+    // These exist mainly so a triangulation EXISTS AT ALL. create_first_triangle needs three
+    // non-collinear points, so without the corners a single segment, an all-collinear polyline,
+    // or any two collinear segments would fail outright -- see the "collinear and degenerate
+    // domains" tests. They also keep every input point strictly interior, which keeps the segment
+    // walks away from the virtual triangles geogram puts outside the convex hull; that is a
+    // convenience rather than a requirement, since every segment joins two input points and is
+    // therefore a chord of their hull and interior regardless.
+    //
+    // The expansion has to cope with a degenerate box (all points on an axis-aligned line, so one
+    // extent is exactly zero, possibly with that coordinate equal to zero too).
     {
         double xmin = A.coords[0], xmax = A.coords[0];
         double ymin = A.coords[1], ymax = A.coords[1];

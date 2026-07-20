@@ -8,7 +8,8 @@
 //
 // PIPELINE
 //   Phase 0  preprocess: dedup points, drop degenerate segments, group duplicate segments,
-//            add the four corners of the 10%-expanded bounding box
+//            add the four corners of the 10%-expanded bounding box (which is what lets
+//            all-collinear input work at all -- see arrangement2d.cpp, Phase 0b)
 //   Phase A  Delaunay triangulation of every point (delaunay2d.h)
 //   Phase B  for each segment, in id order:
 //              pass 1  walk A -> B collecting the mesh vertices that lie on it, creating a

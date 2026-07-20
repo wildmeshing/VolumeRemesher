@@ -962,3 +962,96 @@ TEST_CASE("2d arrangement: dense lattice concurrency", "[2d][arrangement]")
     }
     check_all(c, idx, "dense lattice concurrency");
 }
+
+// ==============================================================================================
+// Collinear / degenerate-domain robustness
+//
+// None of these has three non-collinear input points, so the Delaunay could not be built from the
+// input alone -- create_first_triangle would fail and the whole pipeline would return false. They
+// work because the four corners of the expanded bounding box are inserted first, which is the
+// real justification for those corners (not, as the header used to claim, keeping the segment
+// walks away from virtual triangles: every segment joins two input points, so it is a chord of
+// their convex hull and stays interior regardless).
+//
+// The axis-aligned cases additionally exercise the degenerate-bounding-box branch in
+// build_arrangement, where one extent is exactly zero and the expansion has nothing to scale.
+// ==============================================================================================
+
+TEST_CASE("2d arrangement: collinear and degenerate domains", "[2d][arrangement]")
+{
+    SECTION("a single segment")
+    {
+        check_all({0.0, 0.0, 3.0, 1.0}, {0, 1}, "single segment");
+    }
+
+    SECTION("two collinear segments, disjoint")
+    {
+        check_all({0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 3.0, 0.0}, {0, 1, 2, 3}, "disjoint collinear");
+    }
+
+    SECTION("two collinear segments meeting at a point")
+    {
+        check_all({0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 2.0, 0.0}, {0, 1, 2, 3}, "touching collinear");
+    }
+
+    SECTION("an all-collinear polyline")
+    {
+        std::vector<double> c;
+        std::vector<uint32_t> idx;
+        for (int i = 0; i < 12; i++) {
+            c.push_back(double(i));
+            c.push_back(2.0 * double(i)); // exactly on y = 2x
+        }
+        for (uint32_t i = 0; i + 1 < 12; i++) {
+            idx.push_back(i);
+            idx.push_back(i + 1);
+        }
+        check_all(c, idx, "collinear polyline");
+    }
+
+    SECTION("all points on a horizontal line (zero y extent)")
+    {
+        std::vector<double> c;
+        std::vector<uint32_t> idx;
+        for (int i = 0; i < 8; i++) {
+            c.push_back(double(i));
+            c.push_back(5.0);
+        }
+        for (uint32_t i = 0; i + 1 < 8; i++) {
+            idx.push_back(i);
+            idx.push_back(i + 1);
+        }
+        check_all(c, idx, "horizontal, zero y extent");
+    }
+
+    SECTION("all points on a vertical line through the origin (zero x extent, xmax == 0)")
+    {
+        // xmax is exactly 0 here, so the fallback cannot scale by |xmax| and must use a constant.
+        std::vector<double> c;
+        std::vector<uint32_t> idx;
+        for (int i = 0; i < 8; i++) {
+            c.push_back(0.0);
+            c.push_back(-double(i));
+        }
+        for (uint32_t i = 0; i + 1 < 8; i++) {
+            idx.push_back(i);
+            idx.push_back(i + 1);
+        }
+        check_all(c, idx, "vertical through origin");
+    }
+
+    SECTION("a single degenerate point, no usable segment")
+    {
+        // Both endpoints collapse to one vertex, so the segment is dropped and there is nothing
+        // to track. The domain must still come out as a valid triangulated box.
+        Arrangement2D A;
+        REQUIRE(build_arrangement({4.0, 7.0, 4.0, 7.0}, {0, 1}, A, false));
+        CHECK(A.num_input_pts == 1);
+        CHECK(A.seg.empty());
+        std::string err;
+        INFO(err);
+        REQUIRE(check_arrangement(A, &err));
+        const vrtest::TriOrientationResult o = vrtest::check_tri_orientation(finite_triangles(A));
+        CHECK(o.ok);
+    }
+}
