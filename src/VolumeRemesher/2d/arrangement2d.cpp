@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <deque>
 #include <string>
 
 namespace vol_rem {
@@ -181,7 +182,7 @@ void replace_cavity(Arrangement2D& A, const std::vector<uint32_t>& cav,
 // total. Deliberately not a std::sort with a comparator that can report "equal".
 // =============================================================================================
 
-void triangulate_pseudopolygon(const Arrangement2D& A, uint32_t a, const std::vector<uint32_t>& P,
+[[maybe_unused]] void triangulate_pseudopolygon(const Arrangement2D& A, uint32_t a, const std::vector<uint32_t>& P,
                                size_t lo, size_t hi, uint32_t b,
                                std::vector<std::array<uint32_t, 3>>& out)
 {
@@ -413,10 +414,116 @@ uint32_t advance(Arrangement2D& A, uint32_t cur, uint32_t s)
 // Pass 2: force one edge of the chain into the triangulation
 // =============================================================================================
 
+// Is the quadrilateral spanned by triangle t and its neighbour across edge le strictly convex?
+// Only then may the shared edge be flipped without producing an inverted or degenerate triangle.
+//
+// With t = (a, p, q) counterclockwise (a the apex opposite le) the neighbour is (b, q, p), so the
+// quad traversed counterclockwise is a, p, b, q. Two of the four turns are guaranteed left turns
+// by the triangles' own orientation, leaving exactly two tests.
+bool flip_is_legal(const Arrangement2D& A, uint32_t t, uint32_t le)
+{
+    const uint32_t a = A.tri_node[3 * t + le];
+    const uint32_t p = A.tri_node[3 * t + (le + 1) % 3];
+    const uint32_t q = A.tri_node[3 * t + (le + 2) % 3];
+    const uint32_t t2 = A.tri_neigh[3 * t + le];
+    const uint32_t b = A.tri_node[3 * t2 + A.local_adj(t2, t)];
+    if (a == INVALID || b == INVALID || p == INVALID || q == INVALID) return false;
+    return genericPoint::orient2D(*A.V[a], *A.V[p], *A.V[b]) > 0 &&
+           genericPoint::orient2D(*A.V[b], *A.V[q], *A.V[a]) > 0;
+}
+
+// Replace the shared edge (p,q) of t and its neighbour with (a,b). replace_cavity does the
+// stitching; the only edge interior to this two-triangle cavity is the one being flipped.
+void flip_edge(Arrangement2D& A, uint32_t t, uint32_t le)
+{
+    const uint32_t a = A.tri_node[3 * t + le];
+    const uint32_t p = A.tri_node[3 * t + (le + 1) % 3];
+    const uint32_t q = A.tri_node[3 * t + (le + 2) % 3];
+    const uint32_t t2 = A.tri_neigh[3 * t + le];
+    const uint32_t b = A.tri_node[3 * t2 + A.local_adj(t2, t)];
+    replace_cavity(A, {t, t2}, {{a, p, b}, {a, b, q}});
+}
+
+// Collects the edges crossed by the open segment (u,w), as (triangle, local edge) pairs, in the
+// order the walk meets them. Returns false if the walk cannot start.
+bool collect_crossed(const Arrangement2D& A, uint32_t u, uint32_t w,
+                     std::deque<std::array<uint32_t, 2>>& out)
+{
+    out.clear();
+    const genericPoint& PA = *A.V[u];
+    const genericPoint& PB = *A.V[w];
+
+    uint32_t t = A.vert_tri[u];
+    if (t == INVALID) return false;
+    uint32_t i = A.local_index(t, u);
+    const uint32_t t0 = t, i0 = i;
+    uint32_t e = INVALID;
+    do {
+        const uint32_t p = A.tri_node[3 * t + (i + 1) % 3];
+        const uint32_t q = A.tri_node[3 * t + (i + 2) % 3];
+        if (p != INVALID && q != INVALID &&
+            genericPoint::orient2D(*A.V[u], *A.V[p], PB) > 0 &&
+            genericPoint::orient2D(*A.V[u], *A.V[q], PB) < 0) {
+            e = i;
+            break;
+        }
+        rot_ccw(A, t, i);
+    } while (t != t0 || i != i0);
+    if (e == INVALID) return false;
+
+    uint32_t neg = A.tri_node[3 * t + (e + 1) % 3];
+    uint32_t pos = A.tri_node[3 * t + (e + 2) % 3];
+    for (;;) {
+        // Store the edge by its VERTEX PAIR, not as (triangle, local edge): flipping one edge
+        // renumbers triangles, but leaves every other crossing edge intact as a vertex pair.
+        out.push_back({A.tri_node[3 * t + (e + 1) % 3], A.tri_node[3 * t + (e + 2) % 3]});
+        const uint32_t t2 = A.tri_neigh[3 * t + e];
+        if (t2 == INVALID) return false;
+        const uint32_t bk = A.local_adj(t2, t);
+        const uint32_t x = A.tri_node[3 * t2 + bk];
+        if (x == w) return true;
+        if (x == INVALID) return false;
+        const int ox = genericPoint::orient2D(PA, PB, *A.V[x]);
+        if (ox == 0) return false; // a vertex on the segment: pass 1 should have split here
+        const uint32_t keep = (ox > 0) ? neg : pos;
+        const uint32_t s2v = A.tri_node[3 * t2 + (bk + 2) % 3];
+        e = (s2v == keep) ? (bk + 1) % 3 : (bk + 2) % 3;
+        t = t2;
+        if (ox > 0) pos = x; else neg = x;
+    }
+}
+
+bool segments_properly_cross(const Arrangement2D& A, uint32_t u, uint32_t w, uint32_t a,
+                             uint32_t b)
+{
+    if (a == INVALID || b == INVALID) return false;
+    const int s1 = genericPoint::orient2D(*A.V[u], *A.V[w], *A.V[a]);
+    const int s2 = genericPoint::orient2D(*A.V[u], *A.V[w], *A.V[b]);
+    if (s1 == 0 || s2 == 0 || (s1 > 0) == (s2 > 0)) return false;
+    const int s3 = genericPoint::orient2D(*A.V[a], *A.V[b], *A.V[u]);
+    const int s4 = genericPoint::orient2D(*A.V[a], *A.V[b], *A.V[w]);
+    return s3 != 0 && s4 != 0 && (s3 > 0) != (s4 > 0);
+}
+
+// Statistics for the termination experiment; read by the tests.
+uint64_t g_flip_total = 0;
+uint64_t g_flip_stalls = 0;
+uint64_t g_flip_max_per_edge = 0;
+
+// Forces the edge (u,w) into the triangulation by FLIPPING the edges it crosses.
+//
+// This replaces a bulk cavity retriangulation, which was unsound: the triangles crossed by a
+// straight segment do not always form a simple polygon (two of them can be adjacent across an
+// edge the segment never crosses -- e.g. e = (0,0)-(0,10) with apexes (-1,20) and (1,20), met by
+// the line y = 19), and replacing them wholesale destroys that shared edge even when it is
+// constrained, silently deleting part of another input segment.
+//
+// Flipping cannot do that: only edges the segment CROSSES are ever flipped, and pass 1 guarantees
+// those are unconstrained. Safety is therefore structural. Termination is the open question --
+// each flip may produce a new edge that still crosses (u,w) -- so the loop is bounded and any
+// stall is recorded rather than hung on.
 void insert_constrained_edge(Arrangement2D& A, uint32_t u, uint32_t w, uint32_t s)
 {
-    // Already present. This branch absorbs duplicate segments, full overlap, partial collinear
-    // overlap, and every edge pass 1 stepped along.
     uint32_t ft, fe;
     if (find_edge(A, u, w, ft, fe)) {
         set_constrained(A, ft, fe);
@@ -424,79 +531,65 @@ void insert_constrained_edge(Arrangement2D& A, uint32_t u, uint32_t w, uint32_t 
         return;
     }
 
-    const genericPoint& PA = *A.V[u];
-    const genericPoint& PB = *A.V[w];
-
-    // Find the triangle at u that the segment enters.
-    uint32_t t = A.vert_tri[u];
-    uint32_t i = A.local_index(t, u);
-    const uint32_t t0 = t, i0 = i;
-    uint32_t e = INVALID;
-    do {
-        const uint32_t p = A.tri_node[3 * t + (i + 1) % 3];
-        const uint32_t q = A.tri_node[3 * t + (i + 2) % 3];
-        if (p != INVALID && q != INVALID) {
-            if (genericPoint::orient2D(*A.V[u], *A.V[p], PB) > 0 &&
-                genericPoint::orient2D(*A.V[u], *A.V[q], PB) < 0) {
-                e = i;
-                break;
-            }
-        }
-        rot_ccw(A, t, i);
-    } while (t != t0 || i != i0);
-    assert(e != INVALID);
-
-    std::vector<uint32_t> cav;
-    std::vector<uint32_t> chain_pos, chain_neg;
-
-    uint32_t pos = A.tri_node[3 * t + (e + 2) % 3];
-    uint32_t neg = A.tri_node[3 * t + (e + 1) % 3];
-    cav.push_back(t);
-    chain_pos.push_back(pos);
-    chain_neg.push_back(neg);
-
-    for (;;) {
-        assert(!A.tri_cons[3 * t + e] && "pass 1 should have removed every constrained crossing");
-        const uint32_t t2 = A.tri_neigh[3 * t + e];
-        const uint32_t bk = A.local_adj(t2, t);
-        const uint32_t x = A.tri_node[3 * t2 + bk];
-        cav.push_back(t2);
-        if (x == w) break;
-
-        const int ox = genericPoint::orient2D(PA, PB, *A.V[x]);
-        assert(ox != 0 && "pass 1 should have removed every vertex on the segment");
-
-        const uint32_t keep = (ox > 0) ? neg : pos;
-        const uint32_t s2v = A.tri_node[3 * t2 + (bk + 2) % 3];
-        e = (s2v == keep) ? (bk + 1) % 3 : (bk + 2) % 3;
-        t = t2;
-        if (ox > 0) {
-            pos = x;
-            chain_pos.push_back(x);
-        } else {
-            neg = x;
-            chain_neg.push_back(x);
-        }
+    // Sloan (1993), faithfully: build the list of edges crossing (u,w) ONCE, then work it as a
+    // queue. An edge whose quadrilateral is not strictly convex goes to the BACK to be retried
+    // later, rather than being skipped in favour of the first flippable one -- the earlier naive
+    // version re-derived the list after every flip and always took the first legal edge, which
+    // can cycle.
+    std::deque<std::array<uint32_t, 2>> q;
+    if (!collect_crossed(A, u, w, q) || q.empty()) {
+        g_flip_stalls++;
+        return;
     }
 
-    // Negative side: the polygon [u] + chain_neg + [w] is counterclockwise, base edge (u,w).
-    // Positive side: [w] + reverse(chain_pos) + [u] is counterclockwise, base edge (w,u).
-    std::vector<std::array<uint32_t, 3>> made;
-    triangulate_pseudopolygon(A, u, chain_neg, 0, chain_neg.size(), w, made);
-    std::reverse(chain_pos.begin(), chain_pos.end());
-    triangulate_pseudopolygon(A, w, chain_pos, 0, chain_pos.size(), u, made);
+    uint64_t flips = 0;
+    // A full pass over the queue with no flip means no crossing edge has a convex quad, which is
+    // exactly the lemma Sloan's termination rests on. Count consecutive push-backs to detect it.
+    size_t consecutive_pushbacks = 0;
+    const uint64_t budget = 1000 * uint64_t(q.size()) + 10000;
 
-    replace_cavity(A, cav, made);
+    while (!q.empty()) {
+        if (flips > budget) {
+            g_flip_stalls++;
+            break;
+        }
+        const std::array<uint32_t, 2> e = q.front();
+        q.pop_front();
+
+        uint32_t t, le;
+        if (!find_edge(A, e[0], e[1], t, le)) continue; // already gone
+        if (A.tri_cons[3 * t + le]) continue;           // never flip a constraint
+
+        if (!flip_is_legal(A, t, le)) {
+            q.push_back(e);
+            if (++consecutive_pushbacks > q.size()) {
+                g_flip_stalls++; // no convex quad anywhere in the queue
+                break;
+            }
+            continue;
+        }
+        consecutive_pushbacks = 0;
+
+        const uint32_t a = A.tri_node[3 * t + le];
+        const uint32_t t2 = A.tri_neigh[3 * t + le];
+        const uint32_t b = A.tri_node[3 * t2 + A.local_adj(t2, t)];
+        flip_edge(A, t, le);
+        flips++;
+        if (segments_properly_cross(A, u, w, a, b)) q.push_back({a, b});
+    }
+
+    g_flip_total += flips;
+    if (flips > g_flip_max_per_edge) g_flip_max_per_edge = flips;
 
     if (find_edge(A, u, w, ft, fe)) {
         set_constrained(A, ft, fe);
-    } else {
-        assert(false && "constrained edge missing after cavity fill");
+        record_subedge(A, s, u, w);
     }
-    record_subedge(A, s, u, w);
 }
 
 } // namespace
+
+uint64_t flip_stall_count() { return g_flip_stalls; }
 
 // =============================================================================================
 // Driver
@@ -658,6 +751,11 @@ bool build_arrangement(const std::vector<double>& seg_coords,
 
         if (verbose && (s % 20000 == 0) && s) printf("  ... %u / %zu segments\n", s, A.seg.size());
     }
+
+    if (verbose)
+        printf("2D arrangement: %llu flips, max %llu per edge, %llu stalls\n",
+               (unsigned long long)g_flip_total, (unsigned long long)g_flip_max_per_edge,
+               (unsigned long long)g_flip_stalls);
 
     return true;
 }

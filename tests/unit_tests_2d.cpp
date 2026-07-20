@@ -906,7 +906,7 @@ TEST_CASE("2d arrangement: random segments on a small integer lattice", "[2d][ar
 }
 
 // ==============================================================================================
-// KNOWN-FAILING regression cases
+// Stress regressions
 //
 // These were found by a stress sweep over inputs with far more overlap and concurrency than the
 // hand-built cases above, and they expose two genuine defects in the provenance tracking. The
@@ -914,19 +914,20 @@ TEST_CASE("2d arrangement: random segments on a small integer lattice", "[2d][ar
 // and non-overlapping -- so the bug is confined to which output edges get attributed to which
 // input segment.
 //
-//   1. collinear overlap  -> "output edge outside segment or degenerate": a sub-edge is recorded
-//      for a segment that does not actually contain it.
-//   2. dense concurrency  -> "output edges do not reach both endpoints": the recorded sub-edges
-//      leave part of the segment uncovered.
+//   1. collinear overlap  -> "output edge outside segment or degenerate": provenance was emitted
+//      backwards for segments given opposite to their first occurrence (fixed in io2d).
+//   2. dense concurrency  -> "output edges do not reach both endpoints": the old bulk cavity
+//      retriangulation destroyed constrained edges (fixed by flip-based insertion).
 //
 // The smaller hand-built cases pass, so the defects only surface once many degenerate
 // configurations interact; the sweep needed ~160 random segments on a coarse integer lattice, or
 // ~480 mutually overlapping collinear segments, before one tripped.
 //
-// Both are cheap (well under 0.1 s each). They are expected to FAIL until the defects are fixed.
+// Both are fixed and both are cheap (well under 0.1 s each). They are kept because they are the
+// only inputs in the suite dense enough to have caught either defect.
 // ==============================================================================================
 
-TEST_CASE("2d arrangement: heavy collinear overlap (KNOWN FAILURE)", "[2d][arrangement][known-bug]")
+TEST_CASE("2d arrangement: heavy collinear overlap", "[2d][arrangement]")
 {
     // 480 collinear segments spread over 20 horizontal lines: 24 mutually overlapping segments
     // per line, no crossings at all (zero intersection points are constructed).
@@ -947,8 +948,7 @@ TEST_CASE("2d arrangement: heavy collinear overlap (KNOWN FAILURE)", "[2d][arran
     check_all(c, idx, "heavy collinear overlap");
 }
 
-TEST_CASE("2d arrangement: dense lattice concurrency (KNOWN FAILURE)",
-          "[2d][arrangement][known-bug]")
+TEST_CASE("2d arrangement: dense lattice concurrency", "[2d][arrangement]")
 {
     // 160 random segments on a coarse integer lattice: heavy concurrency and many exactly
     // collinear configurations, ~2600 intersection points.

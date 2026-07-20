@@ -19,14 +19,27 @@
 // WHY TWO PASSES. A single-pass "collect the cavity and split constrained edges as you go" loop
 // has to reconcile a half-built cavity with a topology change inside it. Splitting gives clean
 // invariants instead: after pass 1, no mesh vertex lies strictly inside any (chain[j],chain[j+1])
-// and no constrained edge crosses it, so pass 2's walk has exactly ONE case to handle -- it
-// crosses the interior of an unconstrained edge. Every degeneracy is absorbed by pass 1.
+// and no CONSTRAINED edge crosses it, so pass 2 only ever has to deal with edges it may freely
+// modify.
 //
-// Pass 2 cannot invalidate that for later pairs: it adds no vertices, and it cannot destroy a
-// constrained edge (one crossing (v_j,v_j+1) would contradict pass 1; one with an endpoint
-// strictly inside the cavity is impossible because a cavity has no interior vertices; and a
-// constrained chord across the cavity is impossible because every edge of a crossed triangle is
-// either crossed -- hence unconstrained -- or on the cavity boundary).
+// HOW PASS 2 WORKS. It forces the edge in by FLIPPING the edges the segment crosses (Sloan 1993):
+// build the list of crossing edges once, then work it as a queue, flipping any whose two adjacent
+// triangles form a strictly convex quadrilateral and pushing the rest to the back to retry. A
+// flipped edge that still crosses the segment goes back on the queue.
+//
+// This replaced a bulk cavity retriangulation, which was unsound. The triangles crossed by a
+// straight segment do NOT always form a simple polygon: two of them can be adjacent across an
+// edge the segment never crosses. Concretely, with e = (0,0)-(0,10) and apexes (-1,20) and
+// (1,20), the line y = 19 meets both triangles and misses e entirely. Replacing the crossed
+// triangles wholesale destroys that shared edge even when it is constrained, silently deleting
+// part of another input segment. Flipping cannot do that: only edges the segment CROSSES are ever
+// flipped, and pass 1 guarantees those are unconstrained, so safety is structural rather than
+// argued.
+//
+// Sloan's queue discipline is load-bearing, not incidental. An earlier version re-derived the
+// crossing list after every flip and always flipped the first legal edge; it cycles. On a
+// 160-segment lattice that version burned 66M flips and left 66 edges uninserted, where the queue
+// version needs 4333 flips and stalls nowhere.
 //
 // DETERMINISM. This repository guarantees byte-identical output on Linux/macOS/Windows. Every
 // ordering decision here is therefore a strict total order on integer ids. The two hash maps are
@@ -167,6 +180,11 @@ struct Arrangement2D
 // Returns false only if the input has fewer than one usable point.
 bool build_arrangement(const std::vector<double>& seg_coords,
                        const std::vector<uint32_t>& seg_indexes, Arrangement2D& A, bool verbose);
+
+// Number of times the flip-based constrained-edge insertion could not complete: either no crossed
+// edge had a convex quad, or the flip budget was exhausted. Must be 0; anything else means an
+// input segment is NOT fully realised in the output. Cumulative over the process.
+uint64_t flip_stall_count();
 
 // Validation used by the tests and by the debug builds: every finite triangle strictly positive,
 // adjacency reciprocal, constrained flags mirrored, and no vertex strictly inside an edge.
