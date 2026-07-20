@@ -41,3 +41,23 @@ target_compile_definitions(integration_tests PRIVATE
 list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
 include(Catch)
 catch_discover_tests(integration_tests)
+
+# Unit tests for the 2D pipeline. Unlike integration_tests (which shells out to the
+# mesh_generator binary and links nothing), these link the library and exercise the internal 2D
+# APIs directly -- the lib exports both include/ and src/ as public include dirs.
+add_executable(unit_tests_2d
+    unit_tests_2d.cpp
+)
+target_link_libraries(unit_tests_2d PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
+target_compile_features(unit_tests_2d PRIVATE cxx_std_20)
+target_compile_definitions(unit_tests_2d PRIVATE
+    VRTEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/models"
+    VRTEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET unit_tests_2d POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:unit_tests_2d> $<TARGET_FILE_DIR:unit_tests_2d>
+		COMMAND_EXPAND_LISTS)
+endif()
+catch_discover_tests(unit_tests_2d)
