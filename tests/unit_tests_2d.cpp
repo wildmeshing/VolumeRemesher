@@ -5,6 +5,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "tri_orientation.h"
+
+#include <VolumeRemesher/2d/arrangement2d.h>
 #include <VolumeRemesher/2d/delaunay2d.h>
 #include <VolumeRemesher/2d/predicates2d.h>
 #include <VolumeRemesher/numerics.h>
@@ -13,11 +16,15 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <string>
 #include <vector>
 
 using vol_rem::bigrational;
+using vol_rem::explicitPoint2D;
+using vol_rem::genericPoint;
+using vol_rem::implicitPoint2D_SSI;
 using namespace vol_rem::vr2d;
 
 namespace {
@@ -179,6 +186,67 @@ TEST_CASE("2d predicates: in_circle_2d_SOS agrees with incircle when non-degener
     // ever hits zero the test below is the only thing exercising the perturbation path.
     INFO("cocircular quadruples encountered: " << degenerate);
     CHECK(degenerate > 0);
+}
+
+// REGRESSION TEST for a bug in the generated indirect predicates (indirect_predicates.h).
+//
+// genericPoint::dotProductSign2D returned the WRONG SIGN for roughly a third of inputs in the two
+// configurations that route to dotProductSign2D_IEI_t -- (explicit, implicit, implicit) and
+// (implicit, explicit, implicit) -- because the homogeneous scaling of the first term carried a
+// spurious extra factor of the first point's denominator. That is correct only when the first
+// argument is explicit, which is never the case on those two paths.
+//
+// It went unnoticed because nothing in the 3D pipeline calls the 2D dot-product predicate. The
+// upstream project (github.com/MarcoAttene/Indirect_Predicates, HEAD 2026-05-21) still carries
+// the same defect, so this cannot be fixed by updating the vendored headers.
+//
+// The 2D segment walk relies on this predicate to decide whether a collinear neighbour lies
+// forward or backward along the segment, so the bug made the walk fail outright.
+TEST_CASE("2d predicates: dotProductSign2D agrees with exact arithmetic", "[2d][predicates]")
+{
+    Rnd rnd(0xD07u);
+
+    // Address-stable storage: implicitPoint2D_SSI holds references to its parents.
+    std::deque<explicitPoint2D> E;
+    std::deque<implicitPoint2D_SSI> I;
+    for (int i = 0; i < 400; i++) E.emplace_back(rnd.coord(20), rnd.coord(20));
+    for (size_t i = 0; i + 3 < E.size(); i += 4) {
+        I.emplace_back(E[i], E[i + 1], E[i + 2], E[i + 3]);
+        double x, y;
+        if (!I.back().getApproxXYCoordinates(x, y)) I.pop_back(); // parallel lines
+    }
+    REQUIRE(I.size() > 20);
+
+    const auto exact = [](const genericPoint& a, const genericPoint& b, const genericPoint& c) {
+        bigrational ax, ay, bx, by, cx, cy;
+        REQUIRE(a.getExactXYCoordinates(ax, ay));
+        REQUIRE(b.getExactXYCoordinates(bx, by));
+        REQUIRE(c.getExactXYCoordinates(cx, cy));
+        return ((ax - cx) * (bx - cx) + (ay - cy) * (by - cy)).sgn();
+    };
+
+    // Every combination of explicit/implicit in each of the three argument slots.
+    int checked = 0;
+    for (int mask = 0; mask < 8; mask++) {
+        int per_config = 0;
+        for (int t = 0; t < 600; t++) {
+            const auto pick = [&](int implicit) -> const genericPoint* {
+                return implicit ? (const genericPoint*)&I[rnd.next() % I.size()]
+                                : (const genericPoint*)&E[rnd.next() % E.size()];
+            };
+            const genericPoint* a = pick(mask & 4);
+            const genericPoint* b = pick(mask & 2);
+            const genericPoint* c = pick(mask & 1);
+            if (a == b || a == c || b == c) continue;
+            INFO("config mask " << mask);
+            REQUIRE(genericPoint::dotProductSign2D(*a, *b, *c) == exact(*a, *b, *c));
+            per_config++;
+            checked++;
+        }
+        REQUIRE(per_config > 100); // each configuration actually exercised
+    }
+    INFO("comparisons: " << checked);
+    CHECK(checked > 4000);
 }
 
 // The load-bearing property of the symbolic perturbation: because eps is attached to the POINT
@@ -565,6 +633,253 @@ TEST_CASE("2d delaunay: matches geogram", "[2d][delaunay]")
                                  << "," << want[i][2] << ")");
                 REQUIRE(got[i] == want[i]);
             }
+        }
+    }
+}
+
+// ==============================================================================================
+// Arrangement2D
+// ==============================================================================================
+
+namespace {
+
+using vol_rem::vr2d::Arrangement2D;
+using vol_rem::vr2d::build_arrangement;
+using vol_rem::vr2d::check_arrangement;
+using vol_rem::vr2d::INVALID;
+
+struct R2
+{
+    bigrational x, y;
+};
+
+R2 exact_of(const Arrangement2D& A, uint32_t v)
+{
+    R2 p;
+    const bool ok = A.V[v]->getExactXYCoordinates(p.x, p.y);
+    REQUIRE(ok);
+    return p;
+}
+
+// The 2D form of verify_tracking.cpp's edge-provenance check (Check 3), in exact rationals:
+// every output edge endpoint must be exactly collinear with the input segment, its parameter t
+// must lie in [0,1], and after sorting, the sub-intervals must form an EXACT partition of [0,1]
+// -- both endpoints reached, no gap, no overlap.
+std::string check_provenance(const Arrangement2D& A)
+{
+    for (uint32_t s = 0; s < A.seg.size(); s++) {
+        const R2 P0 = exact_of(A, A.seg[s][0]);
+        const R2 P1 = exact_of(A, A.seg[s][1]);
+        const bigrational dx = P1.x - P0.x;
+        const bigrational dy = P1.y - P0.y;
+        const bigrational len2 = dx * dx + dy * dy;
+        if (len2.sgn() == 0) return "segment " + std::to_string(s) + ": zero length";
+
+        std::vector<std::array<bigrational, 2>> iv;
+        for (uint32_t k = A.seg_head[s]; k != INVALID; k = A.subedges[k].next) {
+            bigrational tt[2];
+            const uint32_t vv[2] = {A.subedges[k].v0, A.subedges[k].v1};
+            for (int e = 0; e < 2; e++) {
+                const R2 Q = exact_of(A, vv[e]);
+                const bigrational qx = Q.x - P0.x;
+                const bigrational qy = Q.y - P0.y;
+                if ((qx * dy - qy * dx).sgn() != 0)
+                    return "segment " + std::to_string(s) + ": output edge not collinear";
+                tt[e] = (qx * dx + qy * dy) / len2;
+            }
+            if (tt[0].sgn() < 0 || tt[1].sgn() < 0) return "segment " + std::to_string(s) + ": t<0";
+            if (tt[0] > bigrational(1.0) || tt[1] > bigrational(1.0))
+                return "segment " + std::to_string(s) + ": t>1";
+            if (!(tt[0] < tt[1]))
+                return "segment " + std::to_string(s) + ": output edge reversed or degenerate";
+            iv.push_back({tt[0], tt[1]});
+        }
+        if (iv.empty()) return "segment " + std::to_string(s) + ": no output edges";
+
+        std::sort(iv.begin(), iv.end(),
+                  [](const std::array<bigrational, 2>& a, const std::array<bigrational, 2>& b) {
+                      return a[0] < b[0];
+                  });
+        if (iv.front()[0].sgn() != 0 || !(iv.back()[1] == bigrational(1.0)))
+            return "segment " + std::to_string(s) + ": output edges do not reach both endpoints";
+        for (size_t i = 1; i < iv.size(); i++)
+            if (!(iv[i][0] == iv[i - 1][1]))
+                return "segment " + std::to_string(s) + ": gap or overlap between output edges";
+    }
+    return {};
+}
+
+std::vector<std::array<uint32_t, 3>> finite_triangles(const Arrangement2D& A)
+{
+    std::vector<std::array<uint32_t, 3>> out;
+    for (uint32_t t = 0; t < A.num_triangles(); t++) {
+        if (!A.tri_is_finite(t)) continue;
+        out.push_back({A.tri_node[3 * t], A.tri_node[3 * t + 1], A.tri_node[3 * t + 2]});
+    }
+    return out;
+}
+
+// Runs the whole battery on one segment soup: structural validity, exact positive orientation,
+// combinatorial orientability, and exact provenance.
+void check_all(const std::vector<double>& coords, const std::vector<uint32_t>& idx,
+               const char* what)
+{
+    Arrangement2D A;
+    INFO("case: " << what);
+    REQUIRE(build_arrangement(coords, idx, A, false));
+
+    std::string err;
+    INFO("structure: " << err);
+    REQUIRE(check_arrangement(A, &err));
+
+    // (c) every output triangle strictly positively oriented, in exact rational arithmetic --
+    // independent of the orient2D predicate the pipeline itself used.
+    for (uint32_t t = 0; t < A.num_triangles(); t++) {
+        if (!A.tri_is_finite(t)) continue;
+        const R2 a = exact_of(A, A.tri_node[3 * t]);
+        const R2 b = exact_of(A, A.tri_node[3 * t + 1]);
+        const R2 c = exact_of(A, A.tri_node[3 * t + 2]);
+        const bigrational area2 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        INFO("triangle " << t << " has non-positive exact area");
+        REQUIRE(area2.sgn() > 0);
+    }
+
+    // (c) orientable and manifold
+    const vrtest::TriOrientationResult o = vrtest::check_tri_orientation(finite_triangles(A));
+    INFO("orientation: same_winding=" << o.same_winding << " over_shared=" << o.over_shared);
+    REQUIRE(o.ok);
+
+    // (d) provenance
+    const std::string perr = check_provenance(A);
+    INFO("provenance: " << perr);
+    REQUIRE(perr.empty());
+}
+
+} // namespace
+
+TEST_CASE("2d arrangement: hand-built degenerate cases", "[2d][arrangement]")
+{
+    SECTION("two crossing segments")
+    {
+        check_all({0, 0, 10, 10, 0, 10, 10, 0}, {0, 1, 2, 3}, "X");
+    }
+    SECTION("three segments concurrent at one point")
+    {
+        // The same geometric point arises from three different segment pairs. It must become ONE
+        // vertex: the first crossing creates it, and the third segment's walk then meets it as an
+        // existing vertex rather than constructing a coincident duplicate.
+        Arrangement2D A;
+        REQUIRE(build_arrangement({-10, 0, 10, 0, 0, -10, 0, 10, -10, -10, 10, 10},
+                                  {0, 1, 2, 3, 4, 5}, A, false));
+        CHECK(A.arena.num_ssi() == 1);
+        check_all({-10, 0, 10, 0, 0, -10, 0, 10, -10, -10, 10, 10}, {0, 1, 2, 3, 4, 5},
+                  "three concurrent");
+    }
+    SECTION("duplicate segments, both orientations")
+    {
+        check_all({0, 0, 10, 0}, {0, 1, 0, 1, 1, 0}, "duplicates");
+    }
+    SECTION("zero-length segments are dropped")
+    {
+        Arrangement2D A;
+        REQUIRE(build_arrangement({0, 0, 10, 0, 5, 5}, {0, 0, 0, 1, 2, 2}, A, false));
+        CHECK(A.seg.size() == 1);
+        check_all({0, 0, 10, 0, 5, 5}, {0, 0, 0, 1, 2, 2}, "zero-length");
+    }
+    SECTION("duplicate input points are merged")
+    {
+        Arrangement2D A;
+        REQUIRE(build_arrangement({0, 0, 10, 0, 0, 0, 5, 5}, {0, 1, 2, 3}, A, false));
+        CHECK(A.num_input_pts == 3);
+        check_all({0, 0, 10, 0, 0, 0, 5, 5}, {0, 1, 2, 3}, "duplicate points");
+    }
+    SECTION("partially overlapping collinear chain")
+    {
+        // (0,0)-(4,0) and (2,0)-(6,0): the shared span [2,4] must be reported for BOTH segments.
+        check_all({0, 0, 4, 0, 2, 0, 6, 0}, {0, 1, 2, 3}, "collinear overlap");
+    }
+    SECTION("fully overlapping collinear chain")
+    {
+        check_all({0, 0, 6, 0, 2, 0, 4, 0}, {0, 1, 2, 3}, "collinear containment");
+    }
+    SECTION("segments sharing an endpoint")
+    {
+        check_all({0, 0, 5, 5, 5, -5}, {0, 1, 0, 2}, "shared endpoint");
+    }
+    SECTION("closed triangle outline")
+    {
+        check_all({0, 0, 10, 0, 5, 8}, {0, 1, 1, 2, 2, 0}, "triangle");
+    }
+    SECTION("T-junction: endpoint in the interior of another segment")
+    {
+        check_all({0, 0, 10, 0, 5, 0, 5, 7}, {0, 1, 2, 3}, "T-junction");
+    }
+}
+
+TEST_CASE("2d arrangement: grids of crossing segments", "[2d][arrangement]")
+{
+    for (const int k : {3, 5, 8}) {
+        DYNAMIC_SECTION("grid " << k << "x" << k)
+        {
+            std::vector<double> c;
+            std::vector<uint32_t> s;
+            for (int i = 0; i < k; i++) {
+                c.insert(c.end(), {double(i), -1.0});
+                c.insert(c.end(), {double(i), double(k)});
+                c.insert(c.end(), {-1.0, double(i)});
+                c.insert(c.end(), {double(k), double(i)});
+            }
+            for (uint32_t i = 0; i < uint32_t(4 * k); i += 2) s.insert(s.end(), {i, i + 1});
+
+            Arrangement2D A;
+            REQUIRE(build_arrangement(c, s, A, false));
+            // Every vertical meets every horizontal exactly once, and no three are concurrent.
+            CHECK(A.arena.num_ssi() == size_t(k) * size_t(k));
+            check_all(c, s, "grid");
+        }
+    }
+}
+
+TEST_CASE("2d arrangement: random segment soups", "[2d][arrangement]")
+{
+    for (const int n : {5, 20, 60}) {
+        DYNAMIC_SECTION("n=" << n)
+        {
+            Rnd rnd(0xA11CEu + uint64_t(n));
+            std::vector<double> c;
+            std::vector<uint32_t> s;
+            for (int i = 0; i < n; i++) {
+                c.push_back(rnd.unit());
+                c.push_back(rnd.unit());
+                c.push_back(rnd.unit());
+                c.push_back(rnd.unit());
+                s.push_back(uint32_t(4 * i) / 2);
+                s.push_back(uint32_t(4 * i) / 2 + 1);
+            }
+            check_all(c, s, "random soup");
+        }
+    }
+}
+
+// Small integer coordinates make exact degeneracies (collinear, cocircular, concurrent) common
+// rather than measure-zero, so this is where the walk's degenerate branches actually get hit.
+TEST_CASE("2d arrangement: random segments on a small integer lattice", "[2d][arrangement]")
+{
+    for (const int n : {10, 40, 100}) {
+        DYNAMIC_SECTION("n=" << n)
+        {
+            Rnd rnd(0x1A771CEu + uint64_t(n));
+            std::vector<double> c;
+            std::vector<uint32_t> s;
+            for (int i = 0; i < n; i++) {
+                c.push_back(rnd.coord(8));
+                c.push_back(rnd.coord(8));
+                c.push_back(rnd.coord(8));
+                c.push_back(rnd.coord(8));
+                s.push_back(uint32_t(2 * i));
+                s.push_back(uint32_t(2 * i) + 1);
+            }
+            check_all(c, s, "lattice soup");
         }
     }
 }
