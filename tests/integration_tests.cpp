@@ -16,6 +16,7 @@
 
 #include "sha256.h"
 #include "tet_orientation.h"
+#include "tri_orientation.h"
 
 #include <array>
 #include <cstdint>
@@ -60,6 +61,7 @@ std::string flags_for(const std::string& mode) {
     if (mode == "blackfaces") return "-b";
     if (mode == "skin") return "-s";
     if (mode == "tet") return "-t";
+    if (mode == "2d") return "-2d";
     return ""; // default -> volume.msh
 }
 
@@ -67,6 +69,7 @@ std::string output_for(const std::string& mode) {
     if (mode == "blackfaces") return "black_faces.off";
     if (mode == "skin") return "skin.off";
     if (mode == "tet") return "volume.tet";
+    if (mode == "2d") return "triangulation.off";
     return "volume.msh";
 }
 
@@ -100,8 +103,47 @@ std::string run_and_hash(const std::string& model, const std::string& mode) {
                             << " over_shared=" << orient.over_shared << " (" << orient.error << ")");
         CHECK(orient.ok);
     }
+    // The 2D arrangement must likewise be a valid, orientable, non-overlapping triangulation.
+    if (mode == "2d" && fs::exists(out)) {
+        const vrtest::TriOrientationResult orient = vrtest::check_tri_orientation_file(out.string());
+        INFO("orientation " << model << ": same_winding=" << orient.same_winding
+                            << " over_shared=" << orient.over_shared << " (" << orient.error << ")");
+        CHECK(orient.ok);
+    }
     fs::remove_all(work, ec);
     return digest;
+}
+
+// The 2D analogue: run `mesh_generator -2d -r` then verify_tracking_2d, which re-derives the
+// segment provenance in exact rational arithmetic (no shared code with the generator).
+std::string run_tracking_check_2d(const std::string& model) {
+    static int counter = 2000000;
+    fs::path work = fs::temp_directory_path() / ("vrtrack2d_" + std::to_string(counter++));
+    std::error_code ec;
+    fs::remove_all(work, ec);
+    fs::create_directories(work, ec);
+
+    const std::string bin = VRTEST_MESH_GENERATOR;
+    const std::string vt = VRTEST_VERIFY_TRACKING_2D;
+    std::string gen, chk;
+#ifdef _WIN32
+    gen = "cd /d \"" + work.string() + "\" && \"" + bin + "\" \"" + model + "\" -2d -r > nul 2>&1";
+    chk = "cd /d \"" + work.string() + "\" && \"" + vt + "\" \"" + model +
+          "\" triangulation.off > vt.out 2>&1";
+#else
+    gen = "cd '" + work.string() + "' && '" + bin + "' '" + model + "' -2d -r > /dev/null 2>&1";
+    chk = "cd '" + work.string() + "' && '" + vt + "' '" + model +
+          "' triangulation.off > vt.out 2>&1";
+#endif
+    std::system(gen.c_str());
+    std::system(chk.c_str());
+
+    std::ifstream f((work / "vt.out").string());
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    const std::string out = ss.str();
+    fs::remove_all(work, ec);
+    return out;
 }
 
 // Run `mesh_generator -t -r` then the independent verify_tracking on 'model' and
@@ -440,6 +482,27 @@ TEST_CASE("integration: model outputs are byte-stable across platforms", "[integ
                 INFO("expected: " << e.sha256);
                 INFO("actual:   " << (got.empty() ? std::string("<no output produced>") : got));
                 REQUIRE(got == e.sha256);
+            }
+        }
+    }
+}
+
+// Every input segment must be reconstructible EXACTLY from the output edges: each output edge
+// collinear with its segment, and the edges partitioning the segment with no gap and no overlap.
+// This is the 2D form of the -t face-provenance test above, and it uses the same independent
+// exact-rational verifier design (no shared code with the generator).
+TEST_CASE("integration: -2d segment provenance is exact", "[integration][tracking][2d]") {
+    const char* models[] = {"2d/england.obj", "2d/siggraph_logo.obj"};
+
+    for (const char* m : models) {
+        DYNAMIC_SECTION(m) {
+            const fs::path model = fs::path(VRTEST_MODELS_DIR) / m;
+            if (!fs::exists(model)) {
+                WARN("model not present, skipping: " << m);
+            } else {
+                const std::string out = run_tracking_check_2d(model.string());
+                INFO("verify_tracking_2d output:\n" << out);
+                REQUIRE(out.find("TRACKING OK") != std::string::npos);
             }
         }
     }

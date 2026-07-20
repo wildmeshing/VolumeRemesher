@@ -23,6 +23,18 @@ if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 		COMMAND_EXPAND_LISTS)
 endif()
 
+# Independent exact-rational verifier for the 2D pipeline's segment provenance. Like
+# verify_tracking, it shares no mesh-generation code (only bigrational, via the lib).
+add_executable(verify_tracking_2d verify_tracking_2d.cpp tri_orientation.h)
+target_link_libraries(verify_tracking_2d PRIVATE VolumeRemesher::VolumeRemesher)
+target_compile_features(verify_tracking_2d PRIVATE cxx_std_20)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET verify_tracking_2d POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:verify_tracking_2d> $<TARGET_FILE_DIR:verify_tracking_2d>
+		COMMAND_EXPAND_LISTS)
+endif()
+
 add_executable(integration_tests integration_tests.cpp sha256.h)
 target_link_libraries(integration_tests PRIVATE Catch2::Catch2WithMain)
 target_compile_features(integration_tests PRIVATE cxx_std_20) # std::filesystem
@@ -30,10 +42,11 @@ target_compile_features(integration_tests PRIVATE cxx_std_20) # std::filesystem
 # The tests invoke the built mesh_generator binary as a subprocess; make sure it
 # is built first and hand its path (plus the models dir and the hash manifest)
 # to the test via compile definitions.
-add_dependencies(integration_tests mesh_generator verify_tracking)
+add_dependencies(integration_tests mesh_generator verify_tracking verify_tracking_2d)
 target_compile_definitions(integration_tests PRIVATE
     VRTEST_MESH_GENERATOR="$<TARGET_FILE:mesh_generator>"
     VRTEST_VERIFY_TRACKING="$<TARGET_FILE:verify_tracking>"
+    VRTEST_VERIFY_TRACKING_2D="$<TARGET_FILE:verify_tracking_2d>"
     VRTEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/models"
     VRTEST_HASHES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/reference_hashes.txt"
 )
