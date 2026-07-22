@@ -30,6 +30,7 @@ MODES = {
     "blackfaces": ("-b", "black_faces.off"),
     "skin":       ("-s", "skin.off"),
     "tet":        ("-t", "volume.tet"),
+    "2d":         ("-2d", "triangulation.off"),
 }
 
 

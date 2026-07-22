@@ -709,9 +709,28 @@ dotProductSign2D_IEI_t(const genericPoint& p, const genericPoint& q, const PT& r
         return 0;
     }
 
-    const T dqp = (dq * dp);
-    const T pxq = (lpx * dqp);
-    const T pyq = (lpy * dqp);
+    // BUG FIX (deviation from the generated upstream code).
+    //
+    // This predicate computes the sign of (p - q) . (r - q), where p and q are implicit points
+    // given in homogeneous form -- p = (lpx/dp, lpy/dp), q = (lqx/dq, lqy/dq) -- and r is
+    // explicit. Scaling the first factor by dp*dq gives
+    //
+    //     dp*dq*(p - q).x  =  lpx*dq - lqx*dp
+    //
+    // The generated code had `pxq = lpx * dq * dp` against `lqxd = lqx * dp`, i.e. an extra
+    // factor of dp on the first term only. That is correct only when dp == 1, which holds exactly
+    // when the first argument is an explicit point. The two dispatch paths that reach this
+    // function (implicit_point.hpp, genericPoint::dotProductSign2D, cases EII and IEI) both pass
+    // an implicit point as p, so dp != 1 and the sign came out wrong for roughly a third of
+    // inputs. Verified against exact bigrational arithmetic; see the regression test
+    // "2d predicates: dotProductSign2D agrees with exact arithmetic" in tests/unit_tests_2d.cpp.
+    //
+    // Nothing in the 3D pipeline calls the 2D dot-product predicate, which is why this went
+    // unnoticed. The scaling is sign-preserving because both denominators are normalised
+    // non-negative (implicit_point.hpp: the SSI constructor negates when the denominator is
+    // negative, and explicit points report d == 1).
+    const T pxq = (lpx * dq);
+    const T pyq = (lpy * dq);
     const T rxq = (rx * dq);
     const T ryq = (ry * dq);
     const T lqxd = (lqx * dp);
@@ -1030,10 +1049,15 @@ static inline int dotProductSign3D_IEI_t(
         return 0;
     }
 
-    const T dqp = (dq * dp);
-    const T pxq = (lpx * dqp);
-    const T pyq = (lpy * dqp);
-    const T pzq = (lpz * dqp);
+    // BUG FIX (deviation from the generated upstream code): the same defect as in
+    // dotProductSign2D_IEI_t above -- the first term carried a spurious extra factor of dp, which
+    // is correct only when the first argument is explicit (dp == 1), while both dispatch paths
+    // that reach here pass an implicit point as p. Currently latent, since nothing in this
+    // repository calls the 3D dot-product predicate; fixed so it is not a trap for the next
+    // caller. See the 2D fix for the derivation.
+    const T pxq = (lpx * dq);
+    const T pyq = (lpy * dq);
+    const T pzq = (lpz * dq);
     const T rxq = (rx * dq);
     const T ryq = (ry * dq);
     const T rzq = (rz * dq);

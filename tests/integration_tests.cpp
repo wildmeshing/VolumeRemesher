@@ -16,6 +16,7 @@
 
 #include "sha256.h"
 #include "tet_orientation.h"
+#include "tri_orientation.h"
 
 #include <array>
 #include <cstdint>
@@ -60,6 +61,7 @@ std::string flags_for(const std::string& mode) {
     if (mode == "blackfaces") return "-b";
     if (mode == "skin") return "-s";
     if (mode == "tet") return "-t";
+    if (mode == "2d") return "-2d";
     return ""; // default -> volume.msh
 }
 
@@ -67,6 +69,7 @@ std::string output_for(const std::string& mode) {
     if (mode == "blackfaces") return "black_faces.off";
     if (mode == "skin") return "skin.off";
     if (mode == "tet") return "volume.tet";
+    if (mode == "2d") return "triangulation.off";
     return "volume.msh";
 }
 
@@ -100,8 +103,47 @@ std::string run_and_hash(const std::string& model, const std::string& mode) {
                             << " over_shared=" << orient.over_shared << " (" << orient.error << ")");
         CHECK(orient.ok);
     }
+    // The 2D arrangement must likewise be a valid, orientable, non-overlapping triangulation.
+    if (mode == "2d" && fs::exists(out)) {
+        const vrtest::TriOrientationResult orient = vrtest::check_tri_orientation_file(out.string());
+        INFO("orientation " << model << ": same_winding=" << orient.same_winding
+                            << " over_shared=" << orient.over_shared << " (" << orient.error << ")");
+        CHECK(orient.ok);
+    }
     fs::remove_all(work, ec);
     return digest;
+}
+
+// The 2D analogue: run `mesh_generator -2d -r` then verify_tracking_2d, which re-derives the
+// segment provenance in exact rational arithmetic (no shared code with the generator).
+std::string run_tracking_check_2d(const std::string& model) {
+    static int counter = 2000000;
+    fs::path work = fs::temp_directory_path() / ("vrtrack2d_" + std::to_string(counter++));
+    std::error_code ec;
+    fs::remove_all(work, ec);
+    fs::create_directories(work, ec);
+
+    const std::string bin = VRTEST_MESH_GENERATOR;
+    const std::string vt = VRTEST_VERIFY_TRACKING_2D;
+    std::string gen, chk;
+#ifdef _WIN32
+    gen = "cd /d \"" + work.string() + "\" && \"" + bin + "\" \"" + model + "\" -2d -r > nul 2>&1";
+    chk = "cd /d \"" + work.string() + "\" && \"" + vt + "\" \"" + model +
+          "\" triangulation.off > vt.out 2>&1";
+#else
+    gen = "cd '" + work.string() + "' && '" + bin + "' '" + model + "' -2d -r > /dev/null 2>&1";
+    chk = "cd '" + work.string() + "' && '" + vt + "' '" + model +
+          "' triangulation.off > vt.out 2>&1";
+#endif
+    std::system(gen.c_str());
+    std::system(chk.c_str());
+
+    std::ifstream f((work / "vt.out").string());
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    const std::string out = ss.str();
+    fs::remove_all(work, ec);
+    return out;
 }
 
 // Run `mesh_generator -t -r` then the independent verify_tracking on 'model' and
@@ -364,13 +406,20 @@ TEST_CASE("integration: -t inserted edges and points are tracked exactly",
 #ifdef NDEBUG
 TEST_CASE("integration: -t all input combinations (surface/edges/points) tracked exactly",
     "[integration][tracking][large]") {
-    const uint32_t N = 10000;
+    // 1000 edges and 1000 points. This used to be 10000, which produced ~4M tets and several
+    // hundred MB of output per combo (seven combos, each generated then verified in exact
+    // rationals). That made the test both very slow and flaky: under concurrent load the
+    // generator would occasionally fail to produce a complete volume.tet, surfacing as
+    // "truncated .tet tets" or an empty verifier log. A tenth of the size exercises exactly the
+    // same code paths -- every combination of surface/edges/points, with the same exact checks --
+    // in a fraction of the time and memory.
+    const uint32_t N = 1000;
     const fs::path surface = fs::path(VRTEST_MODELS_DIR) / "cube_subdiv.off";
     const fs::path dir = fs::temp_directory_path() / "vrcombo_inputs";
     std::error_code ec;
     fs::create_directories(dir, ec);
-    const fs::path edges = dir / "edges10k.off";
-    const fs::path points = dir / "points10k.off";
+    const fs::path edges = dir / "random_edges.off";
+    const fs::path points = dir / "random_points.off";
     write_random_edges(edges, N, 12345);
     write_random_points(points, N, 67890);
 
@@ -440,6 +489,27 @@ TEST_CASE("integration: model outputs are byte-stable across platforms", "[integ
                 INFO("expected: " << e.sha256);
                 INFO("actual:   " << (got.empty() ? std::string("<no output produced>") : got));
                 REQUIRE(got == e.sha256);
+            }
+        }
+    }
+}
+
+// Every input segment must be reconstructible EXACTLY from the output edges: each output edge
+// collinear with its segment, and the edges partitioning the segment with no gap and no overlap.
+// This is the 2D form of the -t face-provenance test above, and it uses the same independent
+// exact-rational verifier design (no shared code with the generator).
+TEST_CASE("integration: -2d segment provenance is exact", "[integration][tracking][2d]") {
+    const char* models[] = {"2d/england.obj", "2d/siggraph_logo.obj"};
+
+    for (const char* m : models) {
+        DYNAMIC_SECTION(m) {
+            const fs::path model = fs::path(VRTEST_MODELS_DIR) / m;
+            if (!fs::exists(model)) {
+                WARN("model not present, skipping: " << m);
+            } else {
+                const std::string out = run_tracking_check_2d(model.string());
+                INFO("verify_tracking_2d output:\n" << out);
+                REQUIRE(out.find("TRACKING OK") != std::string::npos);
             }
         }
     }

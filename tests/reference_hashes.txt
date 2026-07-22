@@ -27,3 +27,7 @@ open_box.off  tet  1548546711ec8730b7fa6d5e94add29df68cce7718ebabd447326b5530c18
 sphere.off  tet  7f93ecd8b6a9a06b2f270ae281499e8005abff1f191768b1610e4c4f5689be5e
 two_cubes.off  tet  bce0842a86721d2cf2f1983ceeb13e998b83f2c6d2542847c4868cd936f10b9c
 upsample_box.off  tet  b45767bcdfb67e17f70259ab2dd26030ceea79f9160b578719ffd4c457e0e082
+
+# 2D arrangement pipeline (-2d): OBJ line soup -> triangulation.off
+2d/england.obj  2d  bcce385108cd700ae2d9f9c1192e4b538452d45e8d9feaa0559f6c1ca23712a3
+2d/siggraph_logo.obj  2d  d552251491c8487a0d2487b3aaeba2252dc65e11f894aad8a3f3b4eb38b11ea4

@@ -3,3 +3,6 @@ build-*
 bin*
 .venv
 __pycache__/
+
+# 2D benchmark model, too large to commit (see plan: local-only)
+models/2d/italy.obj

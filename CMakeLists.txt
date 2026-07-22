@@ -28,6 +28,17 @@ set (SOURCES
     src/VolumeRemesher/BSP.h
     src/VolumeRemesher/BSP.cpp
     src/VolumeRemesher/inOutPartition.cpp
+    # 2D pipeline: segment arrangement -> triangles
+    src/VolumeRemesher/2d/predicates2d.h
+    src/VolumeRemesher/2d/predicates2d.cpp
+    src/VolumeRemesher/2d/delaunay2d.h
+    src/VolumeRemesher/2d/delaunay2d.cpp
+    src/VolumeRemesher/2d/arrangement2d.h
+    src/VolumeRemesher/2d/arrangement2d.cpp
+    src/VolumeRemesher/2d/io2d.h
+    src/VolumeRemesher/2d/io2d.cpp
+    src/VolumeRemesher/2d/embed2d.h
+    src/VolumeRemesher/2d/embed2d.cpp
 )
 
 # Does this target have SIMD (x86 SSE2/AVX2, or ARM NEON on which numerics.h emulates them via

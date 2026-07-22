@@ -8,6 +8,7 @@ This fork adds, on top of the original algorithm:
 * **Optional, combinable inputs.** A run takes any non-empty combination of an input **surface** (triangles), a set of **edges**, and a set of **points** — see [Inserting edges and points](#inserting-edges-and-points).
 * **Exact surface tracking.** For each output element you can recover which input primitive it came from: output faces &rarr; input triangles, output edges &rarr; input edges, output vertices &rarr; input points — see [Tracking output back to the input](#tracking-output-back-to-the-input).
 * **Embedding a surface (and edges/points) in an existing tetrahedral mesh**, programmatically via `embed.h`.
+* **A 2D mode** (`-2d`): the arrangement of a soup of 2D segments, output as a triangulation with the same kind of exact provenance — see [2D mode](#2d-mode).
 
 ## Building
 
@@ -41,6 +42,7 @@ The three inputs — the surface `inputfile_A.off`, the `-e` edges and the `-p` 
 | `-r` | With `-t`, also write exact **rational** vertex coordinates to `volume.tet.rational`. |
 | `-a` | Keep **all** cells: skip the inside/outside min-cut classification and tetrahedralize the whole domain. This makes the `-t` tracking **exact** (no cell is deleted, so every input primitive is realized in the output). Recommended whenever you use the tracking output. |
 | `-f` | Fill holes: cap open boundaries with ear-clipped triangles before meshing (off by default; only affects the solid-output min-cut path — `-a` needs no capping). |
+| `-2d` | **2D mode**: read an OBJ line soup and write the arrangement of its segments as a triangulation. See [2D mode](#2d-mode). |
 | `-e edges.off` | Also insert these edges into the output (implies `-a`). See [input formats](#input-formats). |
 | `-p points.off` | Also insert these points into the output (implies `-a`). See [input formats](#input-formats). |
 | `bool_opcode` | With two surfaces, combine them with a boolean op: `U` union (A∪B), `I` intersection (A∩B), `D` difference (A\B). |
@@ -160,7 +162,81 @@ mesh_generator models/sphere.off -t -r -a \
 #    The bool_opcode (here U) is a required separator and is ignored for embedding;
 #    the surface must lie inside the tet mesh's domain.
 mesh_generator surface.off U input_tetmesh.tet        # -> volume.msh
+
+# 7) 2D: arrangement of a segment soup (see "2D mode" below)
+mesh_generator models/2d/england.obj -2d              # -> triangulation.off
+mesh_generator models/2d/siggraph_logo.obj -2d -r -v  # + exact rationals, verbose
 ```
+
+## 2D mode
+
+`-2d` runs a separate 2D pipeline: given a soup of segments in the plane — which may intersect,
+overlap, be duplicated or be degenerate — it computes their **arrangement** and outputs it as a
+triangulation in which **every input segment is exactly a union of output triangle edges**, plus
+the provenance mapping each input segment to the edges that tile it.
+
+Internally: the input points are deduplicated and embedded in a Delaunay triangulation (a port of
+geogram's `Delaunay2d` onto this repository's exact predicate kernel), together with the four
+corners of the bounding box expanded by 10%. Each segment is then traced through the mesh; where
+it crosses an already-inserted segment, the intersection is created as an exact implicit point
+(segment-segment intersection) rather than a rounded coordinate. All geometric decisions go
+through the same exact predicates as the 3D path, so the output is likewise deterministic and
+byte-identical across platforms.
+
+```
+mesh_generator input.obj -2d [-r] [-v]
+```
+
+### Input format
+
+An **OBJ line soup**: `v x y z` vertex records and `l i j` line records (1-based indices; `l` may
+also carry a longer polyline, which is read as consecutive pairs). The `z` coordinate is ignored,
+so a planar curve exported from a 3D tool works directly. Two examples are bundled in
+`models/2d/`.
+
+Duplicate points are merged, zero-length segments are dropped, and duplicate segments are
+processed once — all of them still appear in the provenance output.
+
+### Output files
+
+| File | Written when | Contents |
+| --- | --- | --- |
+| `triangulation.off` | `-2d` | The output triangulation, as an OFF with `z = 0`. Covers the 10%-expanded bounding box of the input. |
+| `triangulation.off.rational` | `-2d -r` | Exact rational coordinates, one `x y` line per vertex, in the same order as the OFF. |
+| `triangulation.off.segmentprov` | `-2d` | Segment provenance: `<count>`, then one line per **input** segment: `<segment_id> <n> <tri v0 v1> ...`, listing the output edges that tile it in order from the segment's first endpoint. A segment dropped as zero-length has `n = 0`. |
+| `triangulation.off.pointprov` | `-2d` | Point provenance: `<count>`, then one line per **input** point: `<point_id> <tri> <out_vertex>`, or `-1 -1` if it did not survive. |
+
+### Independent verifier
+
+`verify_tracking_2d` re-derives the provenance from the geometry in exact rational arithmetic,
+sharing no code with the generator. For each input segment it checks that every output edge is
+exactly collinear with it and that the edges partition it with no gap and no overlap; it also
+checks that every input point maps to an output vertex with exactly equal coordinates, and that
+the triangulation is orientable and free of overlapping triangles.
+
+```
+mesh_generator models/2d/england.obj -2d -r
+verify_tracking_2d models/2d/england.obj triangulation.off     # -> "TRACKING OK"
+```
+
+### Viewing the result
+
+`tests/arrangement_to_vtu.py` exports a run for ParaView as three files meant to be overlaid: the
+input segments, the output triangulation, and the output edges tagged with the id of the input
+segment they came from. Colouring the input and the output edges by the shared `input_segment_id`
+makes the provenance directly visible.
+
+```
+mesh_generator models/2d/siggraph_logo.obj -2d
+python3 tests/arrangement_to_vtu.py models/2d/siggraph_logo.obj triangulation.off -o siggraph
+# open siggraph_input.vtu, siggraph_output_tris.vtu, siggraph_output_edges.vtu in ParaView
+```
+
+### Programmatic use
+
+`src/VolumeRemesher/2d/embed2d.h` exposes `embed_seg_in_tri_mesh`, the 2D counterpart of
+`embed_tri_in_poly_mesh`: it takes flat arrays of segment coordinates and indices and returns the
+output triangles, exact rational vertex coordinates, and the segment and point provenance.
 
 ## Programmatic API
 

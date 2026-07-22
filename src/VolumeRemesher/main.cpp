@@ -251,6 +251,8 @@ void read_MEDIT_file(
 }
 
 #include "embed.h"
+#include "2d/arrangement2d.h"
+#include "2d/io2d.h"
 
 /// <summary>
 /// Main function
@@ -273,6 +275,8 @@ int main(int argc, char** argv)
                "-b = save the subdivided constraints to 'black_faces.off'\n"
                "-t = triangulate/tetrahedrize output\n"
                "-r = with -t, also write exact-rational vertex coords to 'volume.tet.rational'\n"
+               "-2d = 2D mode: read an OBJ line soup (v/l records) and write the arrangement\n"
+               "     of the input segments as a triangulation to 'triangulation.off'\n"
                "-a = keep all cells: skip the in/out min-cut and tetrahedralize the whole\n"
                "     domain, so the -t surface tracking is exact (no cells are deleted)\n"
                "-f = fill holes: cap open boundaries with ear-clipped triangles (off by\n"
@@ -297,6 +301,7 @@ int main(int argc, char** argv)
     bool blackfaces = false;
     bool export_rational = false;
     bool fill_holes = false; // -f: opt-in cap of open boundaries (solid-output path)
+    bool two_d = false; // -2d: run the 2D segment-arrangement pipeline instead
     bool keep_all_cells = false; // -a: skip in/out min-cut, keep the whole domain
     char* edge_file = NULL; // -e: extra edges to insert
     char* point_file = NULL; // -p: extra points to insert
@@ -306,6 +311,12 @@ int main(int argc, char** argv)
 
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
+            // Multi-character flags must be matched in full BEFORE the single-character
+            // dispatch below, which inspects only argv[i][1] and would read "-2d" as "-2".
+            if (!strcmp(argv[i], "-2d")) {
+                two_d = true;
+                continue;
+            }
             if (argv[i][1] == 'v')
                 verbose = true;
             else if (argv[i][1] == 't')
@@ -341,6 +352,38 @@ int main(int argc, char** argv)
     }
 
     bool two_input = (bool_opcode != '0');
+
+    // ---------------------------------------------------------------------------------------
+    // 2D mode. A completely separate pipeline (src/VolumeRemesher/2d/): an OBJ line soup is
+    // turned into the arrangement of its segments, triangulated, with per-segment provenance.
+    // It shares nothing with the 3D path except the exact predicate kernel.
+    // ---------------------------------------------------------------------------------------
+    if (two_d) {
+        if (fileA_name == NULL) ip_error("-2d needs an input .obj line soup\n");
+
+        std::vector<double> coords;
+        std::vector<uint32_t> indexes;
+        if (!vol_rem::vr2d::read_OBJ_segments(fileA_name, coords, indexes))
+            ip_error("Cannot read the input OBJ line soup\n");
+        if (verbose)
+            printf("Loaded %zu points and %zu segments from %s\n", coords.size() / 2,
+                   indexes.size() / 2, fileA_name);
+
+        vol_rem::vr2d::Arrangement2D arr;
+        if (!vol_rem::vr2d::build_arrangement(coords, indexes, arr, verbose))
+            ip_error("Failed to build the 2D arrangement\n");
+
+        if (!vol_rem::vr2d::write_arrangement("triangulation.off", arr, export_rational))
+            ip_error("Cannot write the output triangulation\n");
+
+        if (verbose) {
+            uint32_t nt = 0;
+            for (uint32_t t = 0; t < arr.num_triangles(); t++)
+                if (arr.tri_is_finite(t)) nt++;
+            printf("Wrote triangulation.off: %zu vertices, %u triangles\n", arr.V.size(), nt);
+        }
+        return 0;
+    }
 
     if (verbose) {
         if (fileB_name == NULL) {
