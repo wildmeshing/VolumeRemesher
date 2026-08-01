@@ -2049,31 +2049,8 @@ void BSPcomplex::find_coplanar_constraints(
 //       strictly convexity is not guaranteed.
 void BSPcomplex::splitCell(uint64_t cell_ind)
 {
-    // Extract the last contraint that intersect the cell and remove it from
-    // the list. The cell will be splitted by that constraint.
     BSPcell& cell = cells[cell_ind];
     auto& cts = cell.constraints;
-    uint32_t constr = cts.back();
-    cts.pop_back();
-
-    // Virtual constraints should be used only when non-virtual constraints are over
-    if (is_virtual(constr)) {
-        for (size_t i = 0; i < cts.size(); i++)
-            if (!is_virtual(cts[i])) {
-                std::swap(cts[i], constr);
-                break;
-            }
-    }
-
-    uint32_t constr_ID = 3 * constr;
-    uint32_t c0 = constraints_vrts[constr_ID];
-    uint32_t c1 = constraints_vrts[constr_ID + 1];
-    uint32_t c2 = constraints_vrts[constr_ID + 2];
-
-
-    // Search for coplanar constraints.
-    vector<uint32_t> coplanar_constr;
-    find_coplanar_constraints(cell_ind, constr, coplanar_constr);
 
     // Distinguish between two mutually exclusive cases:
     // CASE. NO SPLIT: only cell boundary elements (face or edge) lie on the
@@ -2084,22 +2061,67 @@ void BSPcomplex::splitCell(uint64_t cell_ind)
 
     // Create a local richer data structure to avoid multilple extracions of cell
     // edges and vertices.
+    //
+    // This is built once and then reused across the NO SPLIT constraints below. Such a
+    // constraint leaves the cell untouched -- no edge, face or vertex of it changes -- so
+    // the lists stay valid and rebuilding them would reproduce exactly what we already
+    // have. On inputs where most constraints handed to a cell do not actually cut it, that
+    // rebuild dominates the run time.
     uint64_t num_cellEdges = count_cellEdges(cell);
     uint64_t num_cellVrts = count_cellVertices(cell, &num_cellEdges);
     vector<uint64_t> cell_edges(num_cellEdges, UINT64_MAX);
     vector<uint32_t> cell_vrts(num_cellVrts, UINT32_MAX);
     fill_cell_locDS(cell, cell_edges, cell_vrts);
 
-    // Compute the orientation of cell vertices w.r.t. the constraint plane.
-    vrts_orient_wrtPlane(cell_vrts, c0, c1, c2, 1);
-
-    // Analysis of cell vertices disposition w.r.t. constraint-plane.
+    uint32_t constr = UINT32_MAX, c0 = 0, c1 = 0, c2 = 0;
     uint32_t vrtsON, vrtsOVER, vrtsUNDER;
-    count_vrt_orBin(cell_vrts, &vrtsOVER, &vrtsUNDER, &vrtsON);
+    vector<uint32_t> coplanar_constr;
+    bool splits = false;
 
-    // CASE. NO SPLIT:
-    // at least two cell_vrts_or are 0, the other (!=0) have the same signe.
-    if (vrtsUNDER == 0 || vrtsOVER == 0) return;
+    // Take constraints from the back, exactly as before; the only difference is that a
+    // constraint which turns out not to cut the cell is now skipped here instead of
+    // returning to the caller, which would call us straight back to rebuild the same
+    // lists. The order in which constraints are examined, and everything done to each one,
+    // are unchanged.
+    while (!cts.empty()) {
+        // Extract the last contraint that intersect the cell and remove it from
+        // the list. The cell will be splitted by that constraint.
+        constr = cts.back();
+        cts.pop_back();
+
+        // Virtual constraints should be used only when non-virtual constraints are over
+        if (is_virtual(constr)) {
+            for (size_t i = 0; i < cts.size(); i++)
+                if (!is_virtual(cts[i])) {
+                    std::swap(cts[i], constr);
+                    break;
+                }
+        }
+
+        const uint32_t constr_ID = 3 * constr;
+        c0 = constraints_vrts[constr_ID];
+        c1 = constraints_vrts[constr_ID + 1];
+        c2 = constraints_vrts[constr_ID + 2];
+
+        // Search for coplanar constraints.
+        coplanar_constr.clear();
+        find_coplanar_constraints(cell_ind, constr, coplanar_constr);
+
+        // Compute the orientation of cell vertices w.r.t. the constraint plane.
+        vrts_orient_wrtPlane(cell_vrts, c0, c1, c2, 1);
+
+        // Analysis of cell vertices disposition w.r.t. constraint-plane.
+        count_vrt_orBin(cell_vrts, &vrtsOVER, &vrtsUNDER, &vrtsON);
+
+        // CASE. NO SPLIT:
+        // at least two cell_vrts_or are 0, the other (!=0) have the same signe.
+        // The cell is unchanged, so keep the local data structure and try the next one.
+        if (vrtsUNDER == 0 || vrtsOVER == 0) continue;
+
+        splits = true;
+        break;
+    }
+    if (!splits) return;
 
     // (else) CASE. SPLIT-INTERIOR:
     // at least two cell_vrts_or have opposite signe.
