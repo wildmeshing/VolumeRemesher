@@ -60,6 +60,29 @@ inline bool coincident_points(const vertex_t* a, const vertex_t* b)
     return !vertex_compare(a->coord, b->coord);
 }
 
+// Report subdivision progress every this many cells created. Ordinary models finish well
+// inside one step and so stay silent; only a subdivision that is actually running long
+// says anything.
+static const uint64_t SUBDIVISION_PROGRESS_STEP = (uint64_t)1 << 20;
+
+// The cell-subdivision loop is otherwise completely silent, so a slow input is
+// indistinguishable from a stuck one -- both look like a hang with growing memory.
+//
+// "retired" is the loop cursor: cells already known to be free of constraints and hence
+// final. Its share of the total is the useful number to watch, because subdivision ends
+// when it reaches 100%. A run that is converging shows it climbing; one that is not shows
+// it flat.
+static void report_subdivision_progress(uint64_t created, uint64_t retired, clock_t started)
+{
+    printf(
+        "\tsubdividing: %llu cells, %llu retired (%.1f%%), %.0f s\n",
+        (unsigned long long)created,
+        (unsigned long long)retired,
+        created ? 100.0 * (double)retired / (double)created : 0.0,
+        (double)(clock() - started) / CLOCKS_PER_SEC);
+    fflush(stdout);
+}
+
 void remove_duplicated_points(
     vertex_t** vertices_p,
     uint32_t* npts,
@@ -642,6 +665,7 @@ BSPcomplex* makePolyhedralMesh(
     // #define MEM_THRESHOLD   32768
 
     uint64_t cell_ind = 0;
+    uint64_t next_progress = SUBDIVISION_PROGRESS_STEP;
     while (cell_ind < complex.cells.size()) {
 #ifdef MEM_THRESHOLD
         if ((cell_ind & 0x0000000000000fff) == 0) {
@@ -654,6 +678,10 @@ BSPcomplex* makePolyhedralMesh(
             complex.splitCell(cell_ind);
         else
             cell_ind++;
+        if (verbose && complex.cells.size() >= next_progress) {
+            report_subdivision_progress(complex.cells.size(), cell_ind, time5);
+            next_progress = complex.cells.size() + SUBDIVISION_PROGRESS_STEP;
+        }
     }
     clock_t time6 = clock();
     if (verbose) printf("\tCell subdivision %f s\n", (double)(time6 - time5) / CLOCKS_PER_SEC);
@@ -975,6 +1003,7 @@ BSPcomplex* remakePolyhedralMesh(
     // #define MEM_THRESHOLD   32768
 
     uint64_t cell_ind = 0;
+    uint64_t next_progress = SUBDIVISION_PROGRESS_STEP;
     while (cell_ind < complex.cells.size()) {
 #ifdef MEM_THRESHOLD
         if ((cell_ind & 0x0000000000000fff) == 0) {
@@ -987,6 +1016,10 @@ BSPcomplex* remakePolyhedralMesh(
             complex.splitCell(cell_ind);
         else
             cell_ind++;
+        if (verbose && complex.cells.size() >= next_progress) {
+            report_subdivision_progress(complex.cells.size(), cell_ind, time5);
+            next_progress = complex.cells.size() + SUBDIVISION_PROGRESS_STEP;
+        }
     }
     clock_t time6 = clock();
     if (verbose) printf("\tCell subdivision %f s\n", (double)(time6 - time5) / CLOCKS_PER_SEC);
