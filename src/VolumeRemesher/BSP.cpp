@@ -2103,10 +2103,6 @@ void BSPcomplex::splitCell(uint64_t cell_ind)
         c1 = constraints_vrts[constr_ID + 1];
         c2 = constraints_vrts[constr_ID + 2];
 
-        // Search for coplanar constraints.
-        coplanar_constr.clear();
-        find_coplanar_constraints(cell_ind, constr, coplanar_constr);
-
         // Compute the orientation of cell vertices w.r.t. the constraint plane.
         vrts_orient_wrtPlane(cell_vrts, c0, c1, c2, 1);
 
@@ -2122,6 +2118,15 @@ void BSPcomplex::splitCell(uint64_t cell_ind)
         break;
     }
     if (!splits) return;
+
+    // Search for coplanar constraints.
+    //
+    // Only the constraint that actually splits the cell needs this. Running it for a
+    // constraint whose plane misses the cell interior costs an exact orient3d sweep over
+    // every other constraint in the cell, and on hard inputs the great majority of the
+    // constraints examined here are of that kind -- which makes this, not the local data
+    // structure, the dominant cost of the subdivision phase.
+    find_coplanar_constraints(cell_ind, constr, coplanar_constr);
 
     // (else) CASE. SPLIT-INTERIOR:
     // at least two cell_vrts_or have opposite signe.
