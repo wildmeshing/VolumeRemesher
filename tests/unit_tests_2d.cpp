@@ -27,6 +27,9 @@ using vol_rem::explicitPoint2D;
 using vol_rem::genericPoint;
 using vol_rem::implicitPoint2D_SSI;
 using namespace vol_rem::vr2d;
+// vr2d::Sign (NEGATIVE/ZERO/POSITIVE) is geogram-PCK-compatible, but Indirect_Predicates now
+// also ships a global unscoped `enum IP_Sign` with the same enumerators, so the bare names are
+// ambiguous here where both are in scope. Compare against the vr2d ones explicitly.
 
 namespace {
 
@@ -106,11 +109,11 @@ TEST_CASE("2d predicates: orient_2d is positive for counterclockwise", "[2d][pre
     const double b[2] = {1.0, 0.0};
     const double c[2] = {0.0, 1.0};
 
-    CHECK(PCK::orient_2d(a, b, c) == POSITIVE);
-    CHECK(PCK::orient_2d(a, c, b) == NEGATIVE);
+    CHECK(PCK::orient_2d(a, b, c) == vol_rem::vr2d::POSITIVE);
+    CHECK(PCK::orient_2d(a, c, b) == vol_rem::vr2d::NEGATIVE);
 
     const double collinear[2] = {2.0, 0.0};
-    CHECK(PCK::orient_2d(a, b, collinear) == ZERO);
+    CHECK(PCK::orient_2d(a, b, collinear) == vol_rem::vr2d::ZERO);
 }
 
 TEST_CASE("2d predicates: points_are_identical_2d", "[2d][predicates]")
@@ -136,7 +139,7 @@ TEST_CASE("2d predicates: incircle equals the lifted 4x4 determinant", "[2d][pre
         const double inside[2] = {0.25, 0.25};
         const double outside[2] = {5.0, 5.0};
 
-        REQUIRE(PCK::orient_2d(a, b, c) == POSITIVE);
+        REQUIRE(PCK::orient_2d(a, b, c) == vol_rem::vr2d::POSITIVE);
         CHECK(vol_rem::incircle(a[0], a[1], b[0], b[1], c[0], c[1], inside[0], inside[1]) > 0);
         CHECK(vol_rem::incircle(a[0], a[1], b[0], b[1], c[0], c[1], outside[0], outside[1]) < 0);
         CHECK(sgn_rat(det4_lifted(a, b, c, inside)) > 0);
@@ -170,13 +173,13 @@ TEST_CASE("2d predicates: in_circle_2d_SOS agrees with incircle when non-degener
             p[k][1] = rnd.coord(6);
         }
         // precondition: (p0,p1,p2) must be a real triangle
-        if (PCK::orient_2d(p[0], p[1], p[2]) == ZERO) continue;
+        if (PCK::orient_2d(p[0], p[1], p[2]) == vol_rem::vr2d::ZERO) continue;
 
         const int plain =
             vol_rem::incircle(p[0][0], p[0][1], p[1][0], p[1][1], p[2][0], p[2][1], p[3][0], p[3][1]);
         const Sign sos = PCK::in_circle_2d_SOS(p[0], p[1], p[2], p[3]);
 
-        REQUIRE(sos != ZERO); // SOS must never be undecided
+        REQUIRE(sos != vol_rem::vr2d::ZERO); // SOS must never be undecided
         if (plain != 0) {
             REQUIRE(sos == to_sign(plain));
         } else {
@@ -281,7 +284,7 @@ TEST_CASE("2d predicates: in_circle_2d_SOS is antisymmetric under argument permu
         REQUIRE(sgn_rat(det4_lifted(S[0].data(), S[1].data(), S[2].data(), S[3].data())) == 0);
 
         const Sign base = PCK::in_circle_2d_SOS(S[0].data(), S[1].data(), S[2].data(), S[3].data());
-        REQUIRE(base != ZERO);
+        REQUIRE(base != vol_rem::vr2d::ZERO);
 
         for (const auto& q : perm) {
             // parity of the permutation, by counting inversions
@@ -295,10 +298,10 @@ TEST_CASE("2d predicates: in_circle_2d_SOS is antisymmetric under argument permu
             const double* b = S[q[1]].data();
             const double* c = S[q[2]].data();
             const double* d = S[q[3]].data();
-            if (PCK::orient_2d(a, b, c) == ZERO) continue; // precondition violated, skip
+            if (PCK::orient_2d(a, b, c) == vol_rem::vr2d::ZERO) continue; // precondition violated, skip
 
             const Sign got = PCK::in_circle_2d_SOS(a, b, c, d);
-            REQUIRE(got != ZERO);
+            REQUIRE(got != vol_rem::vr2d::ZERO);
             INFO("permutation " << q[0] << q[1] << q[2] << q[3] << (even ? " even" : " odd"));
             REQUIRE(got == (even ? base : Sign(-base)));
         }

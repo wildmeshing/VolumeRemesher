@@ -115,10 +115,55 @@ else()
 	endif()
 endif()
 
+# --- Exact-arithmetic dependencies -------------------------------------------
+# The number types (numerics.h) and exact/indirect predicates used to be vendored
+# under include/VolumeRemesher/. They now live upstream as two header-only
+# libraries and are fetched here, pinned to a specific commit for reproducible,
+# byte-identical output:
+#   NFG (Numbers For Geometry): intervals, expansions, bignatural, bigfloat,
+#       bigrational -- i.e. numerics.h.
+#   Indirect_Predicates: indirect_predicates.h, implicit_point.{h,hpp},
+#       hand_optimized_predicates.hpp. Its implicit_point.h #includes "numerics.h",
+#       so NFG must be on the include path.
+# The thin shims under include/VolumeRemesher/ pull these in and re-export the
+# public types into namespace vol_rem (the API this library and its downstreams
+# depend on, e.g. vol_rem::bigrational).
+include(FetchContent)
+
+# Local-checkout override for upstream development. If a file named .local.cmake
+# exists one level above this repository, NFG and Indirect_Predicates are taken
+# from sibling working copies (../NFG and ../Indirect_Predicates) instead of being
+# fetched. This lets a developer who has all three repos checked out side by side
+# (as Marco Attene does) edit the number/predicate libraries and rebuild here
+# immediately, with no re-fetch. The marker file is untracked (see .gitignore), so
+# ordinary builds always take the FetchContent path below and are unaffected.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../.local.cmake")
+	set(nfg_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../NFG")
+	set(indirect_predicates_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Indirect_Predicates")
+	message(STATUS "VolumeRemesher: .local.cmake present -- using local NFG (${nfg_SOURCE_DIR}) "
+		"and Indirect_Predicates (${indirect_predicates_SOURCE_DIR})")
+else()
+	# SOURCE_SUBDIR points at a directory with no CMakeLists.txt so MakeAvailable
+	# populates the sources but does not add_subdirectory() them -- both projects are
+	# header-only, and Indirect_Predicates' own CMakeLists builds an unwanted test
+	# executable.
+	FetchContent_Declare(nfg
+		GIT_REPOSITORY https://github.com/MarcoAttene/nfg.git
+		GIT_TAG f1df171345e91eeccea3c8b1e3f703a9fe27fca3
+		SOURCE_SUBDIR do-not-configure
+	)
+	FetchContent_Declare(indirect_predicates
+		GIT_REPOSITORY https://github.com/MarcoAttene/Indirect_Predicates.git
+		GIT_TAG 8d354b9affed68332d99c2a361e240543e0dba45
+		SOURCE_SUBDIR do-not-configure
+	)
+	FetchContent_MakeAvailable(nfg indirect_predicates)
+endif()
+
 # On ARM (e.g. Apple Silicon) the exact predicates rely on SIMDe to emulate the
-# x86 AVX2/FMA intrinsics (<x86/avx2.h>, <x86/fma.h>) on top of NEON.
+# x86 AVX2/FMA intrinsics (<x86/avx2.h>, <x86/fma.h>) on top of NEON. NFG's
+# numerics.h includes <x86/avx2.h>/<x86/fma.h> directly under __ARM_NEON.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
-	include(FetchContent)
 	FetchContent_Declare(simde
 		GIT_REPOSITORY https://github.com/simd-everywhere/simde.git
 		GIT_TAG v0.8.2
@@ -128,10 +173,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
 endif()
 
 
-# Public include directory
+# Public include directory. Order: our headers (the shims) first, then NFG and
+# Indirect_Predicates. The shims are addressed as <VolumeRemesher/...> and the
+# upstream headers as bare <numerics.h>/<implicit_point.h>, so the two never clash.
 target_include_directories(${PROJECT_NAME}_lib PUBLIC
 	${CMAKE_CURRENT_SOURCE_DIR}/include
 	${CMAKE_CURRENT_SOURCE_DIR}/src
+	${nfg_SOURCE_DIR}/include
+	${indirect_predicates_SOURCE_DIR}/include
 )
 target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_20)
 
