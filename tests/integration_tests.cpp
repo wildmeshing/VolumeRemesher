@@ -346,6 +346,13 @@ static const TrackModel kTrackModels[] = {
     {"cube_subdiv.off", true}, {"two_cubes.off", true}, {"cube_on_cube.off", true},
     {"upsample_box.off", true}, {"sphere.off", true}, {"double_sphere.off", true},
     {"open_box.off", true}, {"112856simplified.off", false},
+    // Two offset spheres, as handed to the arrangement by simwild's embed_surface after
+    // its simplification pass (396 v / 784 f). Kept because this is the input on which
+    // wildmeshing-toolkit saw the arrangement's output change when VolumeRemesher moved
+    // to the external NFG kernel -- 6 more faces on the tracked surface than the previous
+    // pin produced. verify_tracking says the new output is exact, so the change is a
+    // legitimate difference rather than a regression, and this pins that down.
+    {"simwild_double_sphere_notop.off", true},
 };
 
 TEST_CASE("integration: -t face-provenance tracking is exact", "[integration][tracking]") {
