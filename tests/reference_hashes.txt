@@ -31,3 +31,5 @@ upsample_box.off  tet  b45767bcdfb67e17f70259ab2dd26030ceea79f9160b578719ffd4c45
 # 2D arrangement pipeline (-2d): OBJ line soup -> triangulation.off
 2d/england.obj  2d  bcce385108cd700ae2d9f9c1192e4b538452d45e8d9feaa0559f6c1ca23712a3
 2d/siggraph_logo.obj  2d  d552251491c8487a0d2487b3aaeba2252dc65e11f894aad8a3f3b4eb38b11ea4
+simwild_double_sphere_notop.off  default  bb40afb20a3843933cbfc75f72df204538cbb720a46b80d84db3d1961d6b0885
+simwild_double_sphere_notop.off  tet  bd3626741037af9ad0015bc0a1d0d212328b937d376823df1d11d23f7f8fcdca
