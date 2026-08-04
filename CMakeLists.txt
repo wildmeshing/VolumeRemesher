@@ -152,10 +152,16 @@ else()
 		GIT_TAG f1df171345e91eeccea3c8b1e3f703a9fe27fca3
 		SOURCE_SUBDIR do-not-configure
 	)
+	# PATCH_COMMAND: implicit_point.hpp qualifies two calls as ::inSphere, which cannot
+	# resolve when the header is included inside namespace vol_rem. The script rewrites
+	# them to vol_rem::inSphere and is idempotent. See cmake/patch_indirect_predicates.cmake.
 	FetchContent_Declare(indirect_predicates
 		GIT_REPOSITORY https://github.com/MarcoAttene/Indirect_Predicates.git
 		GIT_TAG 8d354b9affed68332d99c2a361e240543e0dba45
 		SOURCE_SUBDIR do-not-configure
+		PATCH_COMMAND ${CMAKE_COMMAND}
+			-DIP_FILE=<SOURCE_DIR>/include/implicit_point.hpp
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/patch_indirect_predicates.cmake
 	)
 	FetchContent_MakeAvailable(nfg indirect_predicates)
 endif()
