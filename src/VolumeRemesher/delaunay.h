@@ -5,20 +5,11 @@
 #include <cstring>
 
 namespace vol_rem {
-int orient2d(double p1x, double p1y, double p2x, double p2y, double p3x, double p3y);
-int orient3d(
-    double px,
-    double py,
-    double pz,
-    double qx,
-    double qy,
-    double qz,
-    double rx,
-    double ry,
-    double rz,
-    double sx,
-    double sy,
-    double sz);
+// The scalar orient2d(6 doubles) / orient3d(12 doubles) predicates come from
+// Indirect_Predicates' hand_optimized_predicates.hpp, re-exported into vol_rem by
+// <VolumeRemesher/implicit_point.h> (included above). The pointer-argument
+// convenience overloads below forward to them (negating to match the historical
+// sign convention used throughout the Delaunay/BSP code).
 
 inline double orient2d(const double* p1, const double* p2, const double* p3)
 {
