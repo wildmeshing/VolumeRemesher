@@ -155,9 +155,19 @@ else()
 	# PATCH_COMMAND: implicit_point.hpp qualifies two calls as ::inSphere, which cannot
 	# resolve when the header is included inside namespace vol_rem. The script rewrites
 	# them to vol_rem::inSphere and is idempotent. See cmake/patch_indirect_predicates.cmake.
+	# wildmeshing's fork of MarcoAttene/Indirect_Predicates, branched from upstream
+	# 8d354b9 and carrying two fixes while they are in review upstream:
+	#
+	#   - LNC/BPT/TBC getExactXYZCoordinates fetched the homogeneous denominator and
+	#     never divided by it, so those points came back as raw numerators. Only shows
+	#     up when an operand is itself implicit. Upstream: MarcoAttene/#14.
+	#   - inSphere_EEEEE, so the header can be included inside a namespace (see
+	#     include/VolumeRemesher/numerics.h). Upstream: MarcoAttene/#13.
+	#
+	# Repoint at MarcoAttene/Indirect_Predicates once both land.
 	FetchContent_Declare(indirect_predicates
-		GIT_REPOSITORY https://github.com/MarcoAttene/Indirect_Predicates.git
-		GIT_TAG 8d354b9affed68332d99c2a361e240543e0dba45
+		GIT_REPOSITORY https://github.com/wildmeshing/Indirect_Predicates.git
+		GIT_TAG c29c70797fc664dd905e12882942bf01cc24b30f
 		SOURCE_SUBDIR do-not-configure
 		PATCH_COMMAND ${CMAKE_COMMAND}
 			-DIP_FILE=<SOURCE_DIR>/include/implicit_point.hpp
