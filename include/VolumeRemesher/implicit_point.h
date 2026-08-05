@@ -1,36 +1,22 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// Compatibility shim.
+// Indirect_Predicates' point classes and fast predicates, defined INSIDE
+// namespace vol_rem. See VolumeRemesher/numerics.h for why the upstream headers are
+// included inside the namespace rather than re-exported from global scope.
 //
-// The implicit/explicit point classes and the fast double-precision predicates
-// used to be vendored here. They now live upstream in Indirect_Predicates
-// (https://github.com/MarcoAttene/Indirect_Predicates), a header-only LGPL-3.0
-// library by Marco Attene (IMATI-GE / CNR), fetched at configure time and pinned
-// to a specific commit (see the root CMakeLists.txt). Its implicit_point.h pulls
-// in hand_optimized_predicates.hpp and implicit_point.hpp, and #includes
-// "numerics.h" from NFG (kept on the include path).
+// Upstream: https://github.com/MarcoAttene/Indirect_Predicates (header-only, LGPL-3.0,
+// Marco Attene, IMATI-GE / CNR), fetched at configure time and pinned.
 //
-// This header keeps the historical include path <VolumeRemesher/implicit_point.h>
-// and re-exports the global-namespace point types (and the double-precision
-// orient predicates) into namespace vol_rem, the public API this library relies
-// on (e.g. vol_rem::genericPoint, vol_rem::implicitPoint2D_SSI).
+// implicit_point.h pulls in hand_optimized_predicates.hpp, implicit_point.hpp and
+// indirect_predicates.h, and includes "numerics.h"; the numerics shim below has already
+// placed NFG inside vol_rem, so that nested include resolves within the namespace too.
 // ---------------------------------------------------------------------------
 
-#include <implicit_point.h>          // Indirect_Predicates, global namespace
-#include <VolumeRemesher/numerics.h> // re-exports the vol_rem number types
+#include <VolumeRemesher/numerics.h> // NFG, already inside vol_rem
+
+#include <iostream>
 
 namespace vol_rem {
-using ::genericPoint;
-
-using ::explicitPoint2D;
-using ::implicitPoint2D_SSI;
-
-using ::explicitPoint3D;
-using ::implicitPoint3D_LPI;
-using ::implicitPoint3D_TPI;
-
-// Fast double-precision predicates from hand_optimized_predicates.hpp.
-using ::orient2d;
-using ::orient3d;
+#include <implicit_point.h> // Indirect_Predicates
 } // namespace vol_rem
