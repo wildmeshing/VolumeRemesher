@@ -152,26 +152,21 @@ else()
 		GIT_TAG f1df171345e91eeccea3c8b1e3f703a9fe27fca3
 		SOURCE_SUBDIR do-not-configure
 	)
-	# PATCH_COMMAND: implicit_point.hpp qualifies two calls as ::inSphere, which cannot
-	# resolve when the header is included inside namespace vol_rem. The script rewrites
-	# them to vol_rem::inSphere and is idempotent. See cmake/patch_indirect_predicates.cmake.
-	# wildmeshing's fork of MarcoAttene/Indirect_Predicates, branched from upstream
-	# 8d354b9 and carrying two fixes while they are in review upstream:
+	# Upstream, now that both fixes this used to carry on a fork have been merged:
 	#
 	#   - LNC/BPT/TBC getExactXYZCoordinates fetched the homogeneous denominator and
 	#     never divided by it, so those points came back as raw numerators. Only shows
-	#     up when an operand is itself implicit. Upstream: MarcoAttene/#14.
+	#     up when an operand is itself implicit. MarcoAttene/Indirect_Predicates#14.
 	#   - inSphere_EEEEE, so the header can be included inside a namespace (see
-	#     include/VolumeRemesher/numerics.h). Upstream: MarcoAttene/#13.
+	#     include/VolumeRemesher/numerics.h). MarcoAttene/Indirect_Predicates#13.
 	#
-	# Repoint at MarcoAttene/Indirect_Predicates once both land.
+	# The second removes the only reason this needed a PATCH_COMMAND: implicit_point.hpp
+	# no longer qualifies anything as ::inSphere, which could not resolve when the header
+	# was included inside namespace vol_rem.
 	FetchContent_Declare(indirect_predicates
-		GIT_REPOSITORY https://github.com/wildmeshing/Indirect_Predicates.git
-		GIT_TAG c29c70797fc664dd905e12882942bf01cc24b30f
+		GIT_REPOSITORY https://github.com/MarcoAttene/Indirect_Predicates.git
+		GIT_TAG 797c07ccc01c51d6ff5bc777f259576b3dad02b7
 		SOURCE_SUBDIR do-not-configure
-		PATCH_COMMAND ${CMAKE_COMMAND}
-			-DIP_FILE=<SOURCE_DIR>/include/implicit_point.hpp
-			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/patch_indirect_predicates.cmake
 	)
 	FetchContent_MakeAvailable(nfg indirect_predicates)
 endif()
