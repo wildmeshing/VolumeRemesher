@@ -32,12 +32,19 @@
 // NOT RUN BY DEFAULT: tagged [.] and run with
 //     ./embed_regression "[embed_regression]"
 //
-// embed_tri_in_poly_mesh itself returns in a few minutes; what made this test take over an
-// hour was verifying every one of the 10.5M output tets in exact rational arithmetic
-// (bigrational canonicalizes through bignatural::GCD on every operation). It now checks the
-// six tets named above plus the combinatorial consistency of the whole complex, which is
-// cheap. The general "every tet is positive" property is asserted by makeTetrahedra in
-// debug builds.
+// ~37 minutes (measured; it was over an hour before). Verifying the exact rational volume
+// of all 10.5M output tets is what it used to spend that hour on -- bigrational
+// canonicalizes through bignatural::GCD on every operation -- so it now checks the six
+// tets named above, which is instant, plus the combinatorial consistency of the whole
+// complex. The general "every tet has positive volume" property is asserted by
+// makeTetrahedra itself in debug builds.
+//
+// What is left is not this test: most of it is inside embed_tri_in_poly_mesh, whose final
+// loop computes exact rational coordinates for all 1.6M output vertices SERIALLY
+// (embed.cpp). That loop cannot simply be handed to parallel_blocks -- the bigrationals it
+// produces are returned to the caller and would outlive the worker threads whose
+// thread-local pools allocated them. See the THREADING section of
+// include/VolumeRemesher/numerics.h.
 
 #include <catch2/catch_test_macros.hpp>
 
