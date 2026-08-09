@@ -14,22 +14,42 @@
 //
 // The vertices involved are not coincident (nothing within 1e-3) and the tets are
 // genuinely distinct and correctly placed on opposite sides of the face. Only the stored
-// winding is wrong. The region is near-planar -- the z coordinates around the failure are
-// 0, 0, -6.5e-16 and -6.1e-4 -- and every bad tet has a tiny volume, |vol| between 6.7e-07
-// and 1.2e-05, which is where a sign decided in floating point would go astray.
+// winding is wrong.
 //
-// NOT RUN BY DEFAULT: tagged [.] because the embedding takes ~80 minutes. Run it with
+// Cause (MarcoAttene/Indirect_Predicates#15): nothing is decided in floating point -- the
+// exact tier is simply never reached, because the filter wrongly reports that it does not
+// need to be. makeTetrahedra fixes each tet's winding with genericPoint::orient3D, which
+// returns sgn(det) of a determinant scaled by the operands' homogeneous denominators and
+// is therefore correct only if every denominator is positive. implicitPoint3D_TBC -- the
+// barycenter apex of a cell that cannot be tetrahedralized from one of its vertices --
+// neither normalized its denominator nor reported when the interval filter could not
+// decide its sign, so orient3D answered (true orientation) * sgn(d) and the flip inverted
+// the tet. A TBC's denominator is the product of its generators', so it inherits an
+// undecided sign from any generator whose own filter gave up: here a TPI, in a near-planar
+// region (the z coordinates around the failure are 0, 0, -6.5e-16 and -6.1e-4). All six
+// bad tets have a TBC apex, and |vol| between 6.7e-07 and 1.2e-05.
+//
+// NOT RUN BY DEFAULT: tagged [.] and run with
 //     ./embed_regression "[embed_regression]"
+//
+// embed_tri_in_poly_mesh itself returns in a few minutes; what made this test take over an
+// hour was verifying every one of the 10.5M output tets in exact rational arithmetic
+// (bigrational canonicalizes through bignatural::GCD on every operation). It now checks the
+// six tets named above plus the combinatorial consistency of the whole complex, which is
+// cheap. The general "every tet is positive" property is asserted by makeTetrahedra in
+// debug builds.
 
 #include <catch2/catch_test_macros.hpp>
 
 #include "VolumeRemesher/embed.h"
 #include "tet_orientation.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -146,24 +166,62 @@ TEST_CASE("embed_tri_in_poly_mesh emits positively oriented tets", "[embed_regre
 
     REQUIRE(!out_tets.empty());
 
-    // 1. Geometric: every tet must have strictly positive exact signed volume.
-    std::vector<size_t> inverted, degenerate;
+    // 1. Geometric: the six tets this regression is about must have strictly positive
+    // exact signed volume.
+    //
+    // Only these six, not all of them. The exact rational volume of every output tet is
+    // the stronger check but takes over an hour here -- bigrational canonicalizes through
+    // bignatural::GCD on every operation, and there are 10.5M tets. The general property
+    // is asserted in debug builds by makeTetrahedra itself; this test exists to pin the
+    // specific failure, so it looks the failure up directly.
+    //
+    // Vertex indices are stable across the fix (the arrangement is unchanged; only four
+    // barycenter apexes switch from an implicit TBC to an explicit centroid, which changes
+    // no index), so the tets are found by vertex SET -- the winding is exactly what
+    // changed, so the stored order must not be part of the lookup.
+    const std::vector<std::array<uint32_t, 4>> known_bad = {
+        {93271, 3863, 1273729, 3880},
+        {93271, 3880, 1273729, 93287},
+        {93355, 93320, 1273739, 3910},
+        {93355, 3910, 1273739, 93354},
+        {96304, 3841, 1274299, 96305},
+        {50705, 1421, 1297152, 204521},
+    };
+    const auto sorted = [](std::array<uint32_t, 4> t) {
+        std::sort(t.begin(), t.end());
+        return t;
+    };
+    std::map<std::array<uint32_t, 4>, size_t> wanted;
+    for (const auto& t : known_bad) wanted[sorted(t)] = SIZE_MAX;
     for (size_t i = 0; i < out_tets.size(); ++i) {
-        const vol_rem::bigrational v = signed_volume_x6(out_vrt_coords, out_tets[i]);
-        if (v.sgn() < 0) {
-            inverted.push_back(i);
-        } else if (v.sgn() == 0) {
-            degenerate.push_back(i);
+        auto it = wanted.find(sorted(out_tets[i]));
+        if (it != wanted.end()) it->second = i;
+    }
+
+    size_t inverted = 0, degenerate = 0, missing = 0;
+    for (const auto& kv : wanted) {
+        if (kv.second == SIZE_MAX) {
+            // The arrangement moved, so this test no longer covers what it was written
+            // for. Loud rather than silently vacuous.
+            ++missing;
+            UNSCOPED_INFO(
+                "tet [" << kv.first[0] << ", " << kv.first[1] << ", " << kv.first[2] << ", "
+                        << kv.first[3] << "] (sorted) is no longer in the output");
+            continue;
+        }
+        const auto& t = out_tets[kv.second];
+        const vol_rem::bigrational v = signed_volume_x6(out_vrt_coords, t);
+        if (v.sgn() <= 0) {
+            (v.sgn() < 0 ? inverted : degenerate)++;
+            UNSCOPED_INFO(
+                (v.sgn() < 0 ? "inverted" : "degenerate")
+                << " tet #" << kv.second << " = [" << t[0] << ", " << t[1] << ", " << t[2]
+                << ", " << t[3] << "]");
         }
     }
-    for (size_t i = 0; i < inverted.size() && i < 10; ++i) {
-        const auto& t = out_tets[inverted[i]];
-        UNSCOPED_INFO(
-            "inverted tet #" << inverted[i] << " = [" << t[0] << ", " << t[1] << ", " << t[2]
-                             << ", " << t[3] << "]");
-    }
-    CHECK(degenerate.empty());
-    CHECK(inverted.empty());
+    CHECK(missing == 0);
+    CHECK(degenerate == 0);
+    CHECK(inverted == 0);
 
     // 2. Combinatorial: a valid complex gives every internal face opposite windings from
     // its two tets. same_winding > 0 means two tets sit on the same side of a face, which

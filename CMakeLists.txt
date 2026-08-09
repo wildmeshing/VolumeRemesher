@@ -152,7 +152,20 @@ else()
 		GIT_TAG f1df171345e91eeccea3c8b1e3f703a9fe27fca3
 		SOURCE_SUBDIR do-not-configure
 	)
-	# Upstream, now that both fixes this used to carry on a fork have been merged:
+	# Back on the wildmeshing fork, carrying one fix on top of upstream 797c07c while
+	# MarcoAttene/Indirect_Predicates#15 is open:
+	#
+	#   - LNC/BPT/TBC reported a homogeneous denominator whose sign the interval filter
+	#     could not decide as usable (getIntervalLambda returned an unconditional true,
+	#     and the constructor never normalized), where SSI/LPI/TPI do both. The indirect
+	#     predicates return sgn(det) of a determinant scaled by that denominator, so the
+	#     answer came back as the true orientation times an unknown sign. A TBC's
+	#     denominator is the product of its generators', so it inherits an undecided sign
+	#     from any generator whose own filter gave up -- routine near a planar region.
+	#     Symptom here: makeTetrahedra's winding-flip trusts orient3D, so a wrong sign
+	#     becomes an emitted tet with negative volume.
+	#
+	# Two earlier fixes this used to carry are now upstream and no longer need the fork:
 	#
 	#   - LNC/BPT/TBC getExactXYZCoordinates fetched the homogeneous denominator and
 	#     never divided by it, so those points came back as raw numerators. Only shows
@@ -164,8 +177,8 @@ else()
 	# no longer qualifies anything as ::inSphere, which could not resolve when the header
 	# was included inside namespace vol_rem.
 	FetchContent_Declare(indirect_predicates
-		GIT_REPOSITORY https://github.com/MarcoAttene/Indirect_Predicates.git
-		GIT_TAG 797c07ccc01c51d6ff5bc777f259576b3dad02b7
+		GIT_REPOSITORY https://github.com/wildmeshing/Indirect_Predicates.git
+		GIT_TAG 013c7c1c3315c8dd56cbf32dce7bc3041e778372
 		SOURCE_SUBDIR do-not-configure
 	)
 	FetchContent_MakeAvailable(nfg indirect_predicates)

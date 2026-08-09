@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <unordered_map>
@@ -2711,6 +2712,12 @@ bool BSPcomplex::cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v)
 // scheduled (atomic block-fetch) so uneven per-item cost stays balanced. Falls back to a
 // serial call for small n or a single hardware thread. Compiling with VOLUMEREMESHER_SERIAL_TET
 // (CMake: -DVOLUMEREMESHER_PARALLEL_TETRAHEDRALIZATION=OFF) forces the serial path everywhere.
+//
+// CAREFUL with exact arithmetic in here: bigrational, bigfloat and expansion all allocate
+// from thread-local pools, so such a value must be born, used and destroyed inside ONE call
+// of fn -- let only indices and other plain data escape. Computing them in parallel and
+// reading them after the join is a use-after-free that compiles cleanly and asserts nothing.
+// See the THREADING section of include/VolumeRemesher/numerics.h.
 template <class F>
 static void parallel_blocks(uint64_t n, F&& fn)
 {
@@ -2848,8 +2855,8 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
     // vertices) so every tetrahedron has strictly positive volume. The sign is
     // decided with the exact orient3D predicate (no floating point). A genuinely
     // degenerate tet (orient3D == 0) cannot be fixed by a swap and is left as-is;
-    // the triangulation above is meant to prevent those, and the assertion in
-    // saveMesh will flag any that slip through rather than silently emitting them.
+    // the triangulation above is meant to prevent those, and the debug-build assertion
+    // below flags any that slip through rather than silently emitting them.
     // Each tet is independent (orient3D reads only, the swap touches only this tet's slots),
     // so flip in parallel.
     parallel_blocks(final_tets.size() / 4, [&](uint64_t lo, uint64_t hi) {
@@ -2863,6 +2870,60 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
                 std::swap(final_tets[t + 2], final_tets[t + 3]);
         }
     });
+
+#ifndef NDEBUG
+    // Debug-only post-condition: EVERY emitted tet has strictly positive volume.
+    //
+    // The flip above trusts orient3D, so it cannot detect the one failure mode that
+    // matters -- the predicate returning a sign that contradicts the exact coordinates of
+    // its own vertices, which makes the flip turn a good tet into an inverted one. That is
+    // not hypothetical: an implicit point whose homogeneous denominator has an undecided
+    // sign made orient3D wrong on six tets of a 10.5M-tet arrangement, and it surfaced far
+    // downstream as "a face appears twice in the tet list" rather than here.
+    //
+    // Re-asking orient3D would be circular, so this checks against exact rational
+    // coordinates instead -- the same ground truth the caller would use. Debug-only: it
+    // costs more than the tetrahedralization itself.
+    //
+    // The rationals stay inside one parallel task (thread-local pools -- see the THREADING
+    // section of include/VolumeRemesher/numerics.h); only a flag comes out. The per-call
+    // cache pays off because consecutive tets are one cell's fan and repeat its vertices.
+    {
+        std::atomic<uint64_t> bad{0};
+        parallel_blocks(final_tets.size() / 4, [&](uint64_t lo, uint64_t hi) {
+            std::unordered_map<uint32_t, std::array<bigrational, 3>> cache;
+            const auto co = [&](uint32_t v) -> const std::array<bigrational, 3>& {
+                auto it = cache.find(v);
+                if (it != cache.end()) return it->second;
+                std::array<bigrational, 3> c;
+                vertices[v]->getExactXYZCoordinates(c[0], c[1], c[2]);
+                return cache.emplace(v, std::move(c)).first->second;
+            };
+            for (uint64_t k = lo; k < hi; k++) {
+                const uint32_t* t = &final_tets[4 * k];
+                const std::array<bigrational, 3>&a = co(t[0]), &b = co(t[1]);
+                const std::array<bigrational, 3>&c = co(t[2]), &d = co(t[3]);
+                bigrational e1[3], e2[3], e3[3];
+                for (int j = 0; j < 3; j++) {
+                    e1[j] = b[j] - a[j];
+                    e2[j] = c[j] - a[j];
+                    e3[j] = d[j] - a[j];
+                }
+                const bigrational vol = (e1[1] * e2[2] - e1[2] * e2[1]) * e3[0] +
+                    (e1[2] * e2[0] - e1[0] * e2[2]) * e3[1] +
+                    (e1[0] * e2[1] - e1[1] * e2[0]) * e3[2];
+                if (vol.sgn() <= 0) {
+                    if (bad++ < 10)
+                        printf(
+                            "makeTetrahedra: tet %llu = [%u, %u, %u, %u] has %s volume\n",
+                            (unsigned long long)k, t[0], t[1], t[2], t[3],
+                            vol.sgn() < 0 ? "NEGATIVE" : "ZERO");
+                }
+            }
+        });
+        assert(bad == 0 && "makeTetrahedra emitted a non-positive tet");
+    }
+#endif
 
     // Tag output tet faces that lie on the input surface with their input triangles.
     // Done after the winding-flip so local-face indices match the emitted vertex order.

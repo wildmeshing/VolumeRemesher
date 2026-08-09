@@ -29,6 +29,41 @@
 // The system headers upstream needs are included at global scope first; their include
 // guards then make the nested includes no-ops, so nothing from the standard library is
 // dragged into vol_rem.
+//
+// ---------------------------------------------------------------------------
+// THREADING: an NFG number may never leave the thread that created it.
+// ---------------------------------------------------------------------------
+//
+// Every arbitrary-precision type here allocates from a memory pool that is
+// `thread_local`, so each thread has its own:
+//
+//   bignatural   -- `thread_local MultiPool nfgMemoryPool`, and bignatural is the
+//                   storage under BOTH bigfloat and bigrational
+//   expansion    -- `thread_local expansionPool* pool`, set per call by initPool()
+//   expansionObject -- `thread_local MultiPool mempool`
+//
+// So a bigrational/bigfloat/expansion must be created, used and destroyed on ONE thread.
+// Two ways to get this wrong, both of which compile, assert nothing, and corrupt memory:
+//
+//   1. Compute values in parallel, join, then read them. The workers' pools are gone
+//      with the workers, so every later read is a use-after-free. This is the obvious
+//      way to parallelize an exact-arithmetic pass and it is silently unsound.
+//   2. Allocate on one thread and destroy on another (e.g. hand a bigrational to a
+//      collecting vector owned by the main thread). The free goes to the wrong pool.
+//
+// The safe shape is to keep exact values entirely inside one parallel task and let only
+// plain data out of it -- indices, ints, doubles, signs:
+//
+//   parallel_blocks(n, [&](uint64_t lo, uint64_t hi) {
+//       for (uint64_t i = lo; i < hi; i++) {
+//           bigrational v = ...;                  // born and dies in this thread
+//           if (v.sgn() < 0) { lock; bad.push_back(i); }   // only the index escapes
+//       }
+//   });
+//
+// Returning rationals across an API boundary is fine as long as they were built on the
+// caller's thread: embed_tri_in_poly_mesh fills its `vertices` output serially, which is
+// why that vector is safe to hand back.
 // ---------------------------------------------------------------------------
 
 #include <assert.h>

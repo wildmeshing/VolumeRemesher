@@ -92,3 +92,16 @@ if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 		COMMAND_EXPAND_LISTS)
 endif()
 catch_discover_tests(embed_regression)
+
+# Invariants this library relies on from Indirect_Predicates. Fast (seconds) and
+# self-contained: a repin that loses one fails here instead of surfacing as a bad mesh.
+add_executable(predicate_invariants predicate_invariants.cpp)
+target_link_libraries(predicate_invariants PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
+target_compile_features(predicate_invariants PRIVATE cxx_std_20)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET predicate_invariants POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:predicate_invariants> $<TARGET_FILE_DIR:predicate_invariants>
+		COMMAND_EXPAND_LISTS)
+endif()
+catch_discover_tests(predicate_invariants)
