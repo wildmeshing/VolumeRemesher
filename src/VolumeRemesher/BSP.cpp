@@ -2882,13 +2882,37 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
     // downstream as "a face appears twice in the tet list" rather than here.
     //
     // Re-asking orient3D would be circular, so this checks against exact rational
-    // coordinates instead -- the same ground truth the caller would use. Debug-only: it
-    // costs more than the tetrahedralization itself.
+    // coordinates instead -- the same ground truth the caller would use.
+    //
+    // Checking every tet is far too slow to leave in a debug build (bigrational
+    // canonicalizes through bignatural::GCD on every operation, and a debug build is
+    // unoptimized on top of that), so by default it checks the tets that CAN be wrong.
+    // That restriction is a proof, not a sample: an explicit point has d == 1, and LPI and
+    // TPI both normalize a reliably-negative denominator in the constructor AND report an
+    // undecided one through getIntervalLambda, so whenever the predicate uses their filter
+    // at all, d > 0. Only a vertex that reports an undecided denominator sign as usable
+    // can make orient3D lie, so a tet with no such vertex is safe. With a sound
+    // Indirect_Predicates no vertex is ever in that state, which makes this close to free
+    // -- and makes it fire loudly if a repin ever regresses the invariant.
+    //
+    // Define VOLUMEREMESHER_CHECK_ALL_TET_VOLUMES to check every tet regardless.
     //
     // The rationals stay inside one parallel task (thread-local pools -- see the THREADING
-    // section of include/VolumeRemesher/numerics.h); only a flag comes out. The per-call
-    // cache pays off because consecutive tets are one cell's fan and repeat its vertices.
+    // section of include/VolumeRemesher/numerics.h); only a counter comes out. The
+    // per-call cache pays off because consecutive tets are one cell's fan and repeat its
+    // vertices.
     {
+        std::vector<char> undecided_sign(vertices.size(), 0);
+        uint64_t suspect_vertices = 0;
+        for (size_t i = 0; i < vertices.size(); i++) {
+            if (vertices[i]->isExplicit3D()) continue; // d == 1
+            interval_number lx, ly, lz, d;
+            if (!vertices[i]->getIntervalLambda(lx, ly, lz, d)) continue; // predicate goes exact
+            if (d.signIsReliable() && !d.isNegative()) continue; // d > 0, the filter is sound
+            undecided_sign[i] = 1;
+            suspect_vertices++;
+        }
+
         std::atomic<uint64_t> bad{0};
         parallel_blocks(final_tets.size() / 4, [&](uint64_t lo, uint64_t hi) {
             std::unordered_map<uint32_t, std::array<bigrational, 3>> cache;
@@ -2901,6 +2925,11 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
             };
             for (uint64_t k = lo; k < hi; k++) {
                 const uint32_t* t = &final_tets[4 * k];
+#ifndef VOLUMEREMESHER_CHECK_ALL_TET_VOLUMES
+                if (!undecided_sign[t[0]] && !undecided_sign[t[1]] && !undecided_sign[t[2]] &&
+                    !undecided_sign[t[3]])
+                    continue;
+#endif
                 const std::array<bigrational, 3>&a = co(t[0]), &b = co(t[1]);
                 const std::array<bigrational, 3>&c = co(t[2]), &d = co(t[3]);
                 bigrational e1[3], e2[3], e3[3];
@@ -2912,15 +2941,19 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
                 const bigrational vol = (e1[1] * e2[2] - e1[2] * e2[1]) * e3[0] +
                     (e1[2] * e2[0] - e1[0] * e2[2]) * e3[1] +
                     (e1[0] * e2[1] - e1[1] * e2[0]) * e3[2];
-                if (vol.sgn() <= 0) {
-                    if (bad++ < 10)
-                        printf(
-                            "makeTetrahedra: tet %llu = [%u, %u, %u, %u] has %s volume\n",
-                            (unsigned long long)k, t[0], t[1], t[2], t[3],
-                            vol.sgn() < 0 ? "NEGATIVE" : "ZERO");
-                }
+                if (vol.sgn() <= 0 && bad++ < 10)
+                    printf(
+                        "makeTetrahedra: tet %llu = [%u, %u, %u, %u] has %s volume\n",
+                        (unsigned long long)k, t[0], t[1], t[2], t[3],
+                        vol.sgn() < 0 ? "NEGATIVE" : "ZERO");
             }
         });
+        if (suspect_vertices)
+            printf(
+                "makeTetrahedra: %llu vertices report an undecided denominator sign as usable; "
+                "orient3D can be wrong on them -- check the Indirect_Predicates pin\n",
+                (unsigned long long)suspect_vertices);
+        assert(suspect_vertices == 0 && "a point type reports an undecided denominator as usable");
         assert(bad == 0 && "makeTetrahedra emitted a non-positive tet");
     }
 #endif
