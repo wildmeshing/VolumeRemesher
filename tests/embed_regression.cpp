@@ -147,6 +147,7 @@ TEST_CASE("embed_tri_in_poly_mesh emits positively oriented tets", "[embed_regre
     const std::vector<double> no_edge_coords, no_point_coords;
     const std::vector<uint32_t> no_edge_indexes;
     std::vector<std::vector<std::array<uint32_t, 4>>> tri_provenance;
+    std::vector<uint32_t> tri_group;
     std::vector<std::vector<std::array<uint32_t, 3>>> edge_provenance;
     std::vector<std::array<uint32_t, 2>> point_provenance;
 
@@ -167,11 +168,19 @@ TEST_CASE("embed_tri_in_poly_mesh emits positively oriented tets", "[embed_regre
         no_edge_indexes,
         no_point_coords,
         tri_provenance,
+        tri_group,
         edge_provenance,
         point_provenance,
         /*verbose=*/false);
 
     REQUIRE(!out_tets.empty());
+
+    // The coplanar-group map is the key for tri_provenance: one entry per input triangle,
+    // each either a valid index into it or UINT32_MAX for a triangle dropped as degenerate.
+    REQUIRE(tri_group.size() == in.triangle_indexes.size() / 3);
+    for (const uint32_t g : tri_group) {
+        REQUIRE((g == UINT32_MAX || g < tri_provenance.size()));
+    }
 
     // 1. Geometric: the six tets this regression is about must have strictly positive
     // exact signed volume.

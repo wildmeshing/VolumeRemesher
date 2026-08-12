@@ -20,6 +20,7 @@ void embed_tri_in_poly_mesh(
     const std::vector<uint32_t>& edge_indexes,
     const std::vector<double>& point_coords,
     std::vector<std::vector<std::array<uint32_t, 4>>>& out_triangle_provenance,
+    std::vector<uint32_t>& out_triangle_group,
     std::vector<std::vector<std::array<uint32_t, 3>>>& out_edge_provenance,
     std::vector<std::array<uint32_t, 2>>& out_point_provenance,
     bool verbose)
@@ -155,6 +156,22 @@ void embed_tri_in_poly_mesh(
     // Surface / edge / point provenance. All indices are into 'out_tets'/'vertices' (this
     // path emits every complex vertex and tet in order, so no remapping is needed).
     out_triangle_provenance = complex->triangle_provenance; // per coplanar group: {tet,v0,v1,v2}
+    // The key for the line above: caller's input triangle -> its index into
+    // out_triangle_provenance. constraint_coplanar_group is indexed by CONSTRAINT, which is
+    // not the caller's triangle index: read_nodes_and_constraints drops degenerate
+    // (misAlignment) triangles as it copies, so the constraints are the surviving input
+    // triangles compacted, and constraint_original_index[c] records which input triangle each
+    // one was. Compose the two here so the caller never sees constraint numbering. A dropped
+    // triangle keeps UINT32_MAX: it contributed nothing to the arrangement and has no group.
+    // Edge/point-forcing triangles are grouped too but carry original index UINT32_MAX, so
+    // they simply never name a slot here.
+    const std::vector<uint32_t>& cgroup = complex->constraint_coplanar_group;
+    const std::vector<uint32_t>& corig = complex->constraint_original_index;
+    out_triangle_group.assign(triangle_indexes.size() / 3, UINT32_MAX);
+    for (uint32_t c = 0; c < cgroup.size(); c++) {
+        const uint32_t t = (c < corig.size()) ? corig[c] : c;
+        if (t < out_triangle_group.size()) out_triangle_group[t] = cgroup[c];
+    }
     out_edge_provenance.assign(complex->edge_provenance.size(), {});
     for (const auto& ep : complex->edge_provenance)
         if (ep.edge_id < out_edge_provenance.size()) out_edge_provenance[ep.edge_id] = ep.out_edges;

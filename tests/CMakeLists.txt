@@ -105,3 +105,16 @@ if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
 		COMMAND_EXPAND_LISTS)
 endif()
 catch_discover_tests(predicate_invariants)
+
+# Unit tests for the 3D embedding API. Tiny synthetic inputs (a six-tet cube, a few
+# triangles), so unlike embed_regression these run in the default ctest set.
+add_executable(unit_tests_3d unit_tests_3d.cpp)
+target_link_libraries(unit_tests_3d PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
+target_compile_features(unit_tests_3d PRIVATE cxx_std_20)
+if(WIN32 AND VOLUMEREMESHER_WITH_GMP AND HAS_GMPXX)
+	add_custom_command(TARGET unit_tests_3d POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_RUNTIME_DLLS:unit_tests_3d> $<TARGET_FILE_DIR:unit_tests_3d>
+		COMMAND_EXPAND_LISTS)
+endif()
+catch_discover_tests(unit_tests_3d)
