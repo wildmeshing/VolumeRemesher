@@ -44,6 +44,16 @@ namespace vol_rem {
 /// vertex indices of that tet's face / edge / vertex (indices into 'out_tets'/'vertices').
 /// <param name="out_triangle_provenance">Per input coplanar group (see the surface tracking):
 /// the output faces tiling it, each {tet, v0, v1, v2}.</param>
+/// <param name="out_triangle_group">Per input triangle (same indexing as 'triangle_indexes'):
+/// the coplanar group it belongs to, i.e. its index into 'out_triangle_provenance', or
+/// UINT32_MAX if the triangle was degenerate and therefore dropped before the arrangement.
+/// Triangles are grouped by transitive edge-adjacency AND exact coplanarity, so a flat region
+/// tiled by many input triangles is one group and a triangle with no coplanar neighbour is its
+/// own singleton; note this means a group can span triangles from several input surfaces where
+/// they meet coplanarly along a shared edge. Without this the group ids in
+/// 'out_triangle_provenance' cannot be mapped back to the input, which is what a caller needs
+/// to carry per-triangle attributes (material tags, which input file a surface came from)
+/// through the arrangement.</param>
 /// <param name="out_edge_provenance">Per input edge: the output edges tiling it, each
 /// {tet, v0, v1}.</param>
 /// <param name="out_point_provenance">Per input point: {tet, vertex} of the output vertex equal
@@ -66,6 +76,7 @@ void embed_tri_in_poly_mesh(
     const std::vector<uint32_t>& edge_indexes,
     const std::vector<double>& point_coords,
     std::vector<std::vector<std::array<uint32_t, 4>>>& out_triangle_provenance,
+    std::vector<uint32_t>& out_triangle_group,
     std::vector<std::vector<std::array<uint32_t, 3>>>& out_edge_provenance,
     std::vector<std::array<uint32_t, 2>>& out_point_provenance,
     bool verbose);
