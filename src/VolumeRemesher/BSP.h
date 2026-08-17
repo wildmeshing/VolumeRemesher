@@ -262,7 +262,14 @@ public:
 
 
     // Supporting vectors
-    std::vector<char> vrts_orBin; // Used to "cache" vertex orientations
+    // `signed char`, not `char`: this caches orient3D results, which are -1, 0 or +1, and
+    // count_vrt_orBin() reads them back by comparing against -1. Plain `char` is signed on
+    // x86-64 and on Apple's arm64 ABI but UNSIGNED under AAPCS64 (Linux on arm64), where a
+    // stored -1 reads back as 255, the `== -1` test never matches, and every vertex below a
+    // constraint plane is counted as lying above it. splitCell() then sees vrtsUNDER == 0 for
+    // every constraint, concludes NO SPLIT each time, and the input surface is silently never
+    // embedded -- the BSP complex comes out with exactly as many cells as it went in with.
+    std::vector<signed char> vrts_orBin; // Used to "cache" vertex orientations
     //  w.r.t. some plane.
     // (same length of vertices)
     std::vector<uint32_t> vrts_visit; // To flag visited vertices when needed

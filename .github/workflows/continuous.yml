@@ -16,11 +16,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        # ubuntu-24.04-arm covers Linux on arm64. Without it the matrix tested Linux only
+        # on x86-64 and arm64 only on macOS, and no job ever compiled the combination --
+        # which is where a `char` signedness bug lived undetected: `char` is signed on
+        # x86-64 and under Apple's arm64 ABI but unsigned under AAPCS64. Six of these
+        # integration tests fail on that platform without the accompanying BSP.h fix.
+        os: [ubuntu-latest, ubuntu-24.04-arm]
         config: [Debug, Release]
         include:
           - os: ubuntu-latest
             name: Linux
+          - os: ubuntu-24.04-arm
+            name: Linux arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v1
