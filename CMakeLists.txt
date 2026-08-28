@@ -137,7 +137,7 @@ include(FetchContent)
 # (as Marco Attene does) edit the number/predicate libraries and rebuild here
 # immediately, with no re-fetch. The marker file is untracked (see .gitignore), so
 # ordinary builds always take the FetchContent path below and are unaffected.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../.local.cmake")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.local.cmake")
 	set(nfg_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../NFG")
 	set(indirect_predicates_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Indirect_Predicates")
 	message(STATUS "VolumeRemesher: .local.cmake present -- using local NFG (${nfg_SOURCE_DIR}) "
