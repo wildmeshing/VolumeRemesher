@@ -143,51 +143,27 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.local.cmake")
 		"and Indirect_Predicates (${indirect_predicates_SOURCE_DIR}) "
 		"and Delaunay3D (${delaunay3d_SOURCE_DIR})")
 else()
-	# SOURCE_SUBDIR points at a directory with no CMakeLists.txt so MakeAvailable
-	# populates the sources but does not add_subdirectory() them -- both projects are
-	# header-only, and Indirect_Predicates' own CMakeLists builds an unwanted test
-	# executable.
 	FetchContent_Declare(nfg
 		GIT_REPOSITORY https://github.com/MarcoAttene/nfg.git
-		GIT_TAG f1df171345e91eeccea3c8b1e3f703a9fe27fca3
-		SOURCE_SUBDIR do-not-configure
-	)
-	# Back on the wildmeshing fork, carrying one fix on top of upstream 797c07c while
-	# MarcoAttene/Indirect_Predicates#15 is open:
-	#
-	#   - LNC/BPT/TBC reported a homogeneous denominator whose sign the interval filter
-	#     could not decide as usable (getIntervalLambda returned an unconditional true,
-	#     and the constructor never normalized), where SSI/LPI/TPI do both. The indirect
-	#     predicates return sgn(det) of a determinant scaled by that denominator, so the
-	#     answer came back as the true orientation times an unknown sign. A TBC's
-	#     denominator is the product of its generators', so it inherits an undecided sign
-	#     from any generator whose own filter gave up -- routine near a planar region.
-	#     Symptom here: makeTetrahedra's winding-flip trusts orient3D, so a wrong sign
-	#     becomes an emitted tet with negative volume.
-	#
-	# Two earlier fixes this used to carry are now upstream and no longer need the fork:
-	#
-	#   - LNC/BPT/TBC getExactXYZCoordinates fetched the homogeneous denominator and
-	#     never divided by it, so those points came back as raw numerators. Only shows
-	#     up when an operand is itself implicit. MarcoAttene/Indirect_Predicates#14.
-	#   - inSphere_EEEEE, so the header can be included inside a namespace (see
-	#     include/VolumeRemesher/numerics.h). MarcoAttene/Indirect_Predicates#13.
-	#
-	# The second removes the only reason this needed a PATCH_COMMAND: implicit_point.hpp
-	# no longer qualifies anything as ::inSphere, which could not resolve when the header
-	# was included inside namespace vol_rem.
-	FetchContent_Declare(indirect_predicates
-		GIT_REPOSITORY https://github.com/wildmeshing/Indirect_Predicates.git
-		GIT_TAG 013c7c1c3315c8dd56cbf32dce7bc3041e778372
+		GIT_TAG main
 		SOURCE_SUBDIR do-not-configure
 	)
 
-	FetchContent_Declare(delaunay3d
-		GIT_REPOSITORY https://github.com/MarcoAttene/delaunay3d.git
+	FetchContent_Declare(indirect_predicates
+		GIT_REPOSITORY https://github.com/MarcoAttene/Indirect_Predicates.git
+		SOURCE_SUBDIR do-not-configure
+	)
+
+	FetchContent_Declare(Delaunay3D
+		GIT_REPOSITORY https://github.com/MarcoAttene/Delaunay3D.git
+		GIT_TAG main
 		SOURCE_SUBDIR do-not-configure
 	)
 
 	FetchContent_MakeAvailable(nfg indirect_predicates delaunay3d)
+	message(STATUS "NFG is available in " ${nfg_SOURCE_DIR})
+	message(STATUS "Indirect_Predicates is available in " ${indirect_predicates_SOURCE_DIR})
+	message(STATUS "Delaunay3D is available in " ${delaunay3d_SOURCE_DIR})
 endif()
 
 # On ARM (e.g. Apple Silicon) the exact predicates rely on SIMDe to emulate the
