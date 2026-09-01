@@ -13,7 +13,6 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
-#include "delaunay.h"
 
 #define OPPOSITE_SIGNE(a, b) (a < 0 && b > 0) || (a > 0 && b < 0)
 #define MIN_VECT_ELEM(v, n, it, i_min)    \
@@ -692,19 +691,19 @@ int localizedPointInTriangle(
 //         tetrahedra indexing, but without ghost-tets).
 uint64_t BSPcomplex::removing_ghost_tets(const TetMesh* mesh, vector<uint64_t>& new_order)
 {
-    // new_order have as many element as mesh->tet_num,
+    // new_order have as many element as mesh->numTets(),
     // new_order[i-th tet] =
     //    i - (num of ghost_tet between 0 and i) IF i-th tet is non-ghost
     //    UINT64_MAX                             IF i-th tet is ghost
     uint64_t ghost_tet_count = 0;
-    for (uint64_t tet_ind = 0; tet_ind < mesh->tet_num; tet_ind++) {
+    for (uint64_t tet_ind = 0; tet_ind < mesh->numTets(); tet_ind++) {
         if (IS_GHOST_TET(tet_ind)) {
             new_order[tet_ind] = UINT64_MAX;
             ghost_tet_count++;
         } else
             new_order[tet_ind] = tet_ind - ghost_tet_count;
     }
-    return mesh->tet_num - ghost_tet_count;
+    return mesh->numTets() - ghost_tet_count;
 }
 
 //  Input: pointer to mesh,
@@ -722,17 +721,12 @@ uint64_t BSPcomplex::add_tetEdge(
     uint64_t tet_ind,
     const vector<uint64_t>& new_order)
 {
-    // Tetrahedra incident in <endpt0,endpt1>
-    uint32_t edge_ends[2] = {e0, e1};
-    uint64_t num_incTet;
-    uint64_t* incTet = mesh->ETrelation(edge_ends, tet_ind, &num_incTet);
-    // Note. ETrelation can return ghost-tet.
-
     uint64_t min = UINT64_MAX;
-    for (uint32_t i = 0; i < num_incTet; i++)
-        if (!IS_GHOST_TET(incTet[i]) && incTet[i] < min) min = incTet[i];
-
-    free(incTet);
+    static thread_local std::vector<uint64_t> et;
+    et.clear();
+    mesh->ETfast(e0, e1, tet_ind, et);
+    for (uint64_t t : et)
+        if (t < min) min = t;
 
     if (min == tet_ind) {
         // None of the tetrahedra incident in <e0,e1> has been visited,
@@ -904,16 +898,15 @@ BSPcomplex::BSPcomplex(
     const uint32_t* num_map_f3)
 {
     // Uploading the vertices of the mesh
-    vertices.resize(mesh->num_vertices);
-    for (uint32_t vrt = 0; vrt < mesh->num_vertices; vrt++)
-        vertices[vrt] = new explicitPoint3D(
-            mesh->vertices[vrt].coord[0],
-            mesh->vertices[vrt].coord[1],
-            mesh->vertices[vrt].coord[2]);
+    vertices.resize(mesh->numVertices());
+    for (uint32_t vrt = 0; vrt < mesh->numVertices(); vrt++) {
+        const double* crd = mesh->vertices[vrt].coord;
+        vertices[vrt] = new explicitPoint3D(crd[0], crd[1], crd[2]);
+    }
 
     // Initialize vrts_orBin:
     // since orient3D can be -1, 0 or 1 all elements are set to 2.
-    vrts_orBin.resize(mesh->num_vertices, 2);
+    vrts_orBin.resize(mesh->numVertices(), 2);
 
     // Uploading the constraints (the last num_virtual_triangles constraints are virtual.)
     first_virtual_constraint = _constraints->num_triangles - _constraints->num_virtual_triangles;
@@ -944,12 +937,12 @@ BSPcomplex::BSPcomplex(
     }
 
     // Establish new tetrahedtra-(cell) indexing: only non-ghost cell are indexed.
-    vector<uint64_t> new_order(mesh->tet_num, UINT64_MAX);
+    vector<uint64_t> new_order(mesh->numTets(), UINT64_MAX);
     uint64_t cell_num = removing_ghost_tets(mesh, new_order);
 
     // Creating as many empty cells as the number of non-ghost tet_
     cells.resize(cell_num);
-    edges.reserve(cell_num + mesh->num_vertices);
+    edges.reserve(cell_num + mesh->numVertices());
     faces.reserve(cell_num * 2);
 
 
@@ -957,7 +950,7 @@ BSPcomplex::BSPcomplex(
     // cells -> the non-ghost tetrahedra in the mesh,
     // faces -> the faces of the non-ghost tetrahedra in the mesh,
     // edges -> the edges of the non-ghost tetrahedra in the mesh.
-    for (uint64_t tet_ind = 0; tet_ind < mesh->tet_num; tet_ind++) {
+    for (uint64_t tet_ind = 0; tet_ind < mesh->numTets(); tet_ind++) {
         // Here each BSPcell is a non-ghost tetrahedron of the mesh:
         // consider a tetrahedron (tet) whose index is tet_ind.
         uint64_t cell_ind = new_order[tet_ind];
@@ -2964,7 +2957,7 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
     // Tag output tet edges/vertices coming from inserted edges/points.
     trackEdgePointProvenance();
 
-    if (verbose) printf("Tetrahedra: %lu\n", final_tets.size() / 4);
+    if (verbose) printf("Tetrahedra: %zu\n", final_tets.size() / 4);
 }
 
 // Do the two coplanar triangles f0f1f2 and t0t1t2 overlap with positive area?

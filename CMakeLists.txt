@@ -10,6 +10,8 @@ option(VOLREM_ENABLE_AVX2 "Enable AVX2 instructions" ON)
 
 #####################
 
+set(LGPL ON)
+
 # set the project name
 project(mesh_generator)
 
@@ -17,14 +19,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 set (SOURCES
     src/VolumeRemesher/makePolyhedralMesh.cpp
-    src/VolumeRemesher/delaunay.h
-    src/VolumeRemesher/delaunay.cpp
     src/VolumeRemesher/embed.h
     src/VolumeRemesher/embed.cpp
     src/VolumeRemesher/conforming_mesh.h
     src/VolumeRemesher/conforming_mesh.cpp
-    src/VolumeRemesher/extended_predicates.h
-    src/VolumeRemesher/extended_predicates.cpp
     src/VolumeRemesher/BSP.h
     src/VolumeRemesher/BSP.cpp
     src/VolumeRemesher/inOutPartition.cpp
@@ -140,8 +138,10 @@ include(FetchContent)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.local.cmake")
 	set(nfg_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../NFG")
 	set(indirect_predicates_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Indirect_Predicates")
+	set(delaunay3d_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Delaunay3D")
 	message(STATUS "VolumeRemesher: .local.cmake present -- using local NFG (${nfg_SOURCE_DIR}) "
-		"and Indirect_Predicates (${indirect_predicates_SOURCE_DIR})")
+		"and Indirect_Predicates (${indirect_predicates_SOURCE_DIR}) "
+		"and Delaunay3D (${delaunay3d_SOURCE_DIR})")
 else()
 	# SOURCE_SUBDIR points at a directory with no CMakeLists.txt so MakeAvailable
 	# populates the sources but does not add_subdirectory() them -- both projects are
@@ -181,7 +181,13 @@ else()
 		GIT_TAG 013c7c1c3315c8dd56cbf32dce7bc3041e778372
 		SOURCE_SUBDIR do-not-configure
 	)
-	FetchContent_MakeAvailable(nfg indirect_predicates)
+
+	FetchContent_Declare(delaunay3d
+		GIT_REPOSITORY https://github.com/MarcoAttene/delaunay3d.git
+		SOURCE_SUBDIR do-not-configure
+	)
+
+	FetchContent_MakeAvailable(nfg indirect_predicates delaunay3d)
 endif()
 
 # On ARM (e.g. Apple Silicon) the exact predicates rely on SIMDe to emulate the
@@ -205,6 +211,7 @@ target_include_directories(${PROJECT_NAME}_lib PUBLIC
 	${CMAKE_CURRENT_SOURCE_DIR}/src
 	${nfg_SOURCE_DIR}/include
 	${indirect_predicates_SOURCE_DIR}/include
+	${delaunay3d_SOURCE_DIR}/include
 )
 target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_20)
 
