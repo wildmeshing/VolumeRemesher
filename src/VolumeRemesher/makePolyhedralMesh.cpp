@@ -495,9 +495,6 @@ BSPcomplex* makePolyhedralMesh(
             verbose);
     }
 
-    if (num_vertices < 4) ip_error("Cannot mesh less than 4 vertices.");
-    if (constraints->num_triangles < 1) ip_error("No non-degenerate constraints loaded.");
-
     TetMesh* mesh = new TetMesh;
     std::vector<double> coordinates(num_vertices * 3);
     for (uint32_t i = 0, j = 0; i < num_vertices; i++) {
@@ -517,9 +514,24 @@ BSPcomplex* makePolyhedralMesh(
         if (fill_holes) fill_holes_in_constraints(constraints, mesh, verbose);
         // Force extra edges/points into the output (appended after the caps). Same
         // timing requirement: before the Delaunay permutation and virtual constraints.
-        if (has_extra) insert_edges_and_points(constraints, mesh, *extra, verbose);
+        if (has_extra) {
+            insert_edges_and_points(constraints, mesh, *extra, verbose);
+            // Edge/point forcing features can be the only input (an edges-only or points-only
+            // run has no surface triangles or vertices of its own). init_vertices computed the
+            // static predicate filters over just the surface vertices -- of which there may
+            // have been none, leaving max_coord at its DBL_MAX sentinel -- so recompute them
+            // now that the forcing vertices are present.
+            mesh->init_static_filters();
+        }
         constraints->constr_group = (uint32_t*)calloc(constraints->num_triangles, sizeof(uint32_t));
     }
+
+    // Validate now that any edge/point forcing features have been added: an edges-only or
+    // points-only input has no surface triangles or vertices, so these counts are only
+    // meaningful here. (Before the Delaunay3D externalization this check sat after
+    // insert_edges_and_points; the refactor moved it earlier, which rejected no-surface input.)
+    if (mesh->numVertices() < 4) ip_error("Cannot mesh less than 4 vertices.");
+    if (constraints->num_triangles < 1) ip_error("No non-degenerate constraints loaded.");
 
     if (free_mem) {
         free(coords_A);

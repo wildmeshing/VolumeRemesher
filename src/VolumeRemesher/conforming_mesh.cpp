@@ -3560,192 +3560,187 @@ void insert_edges_and_points(
     const extra_features_t& extra,
     bool verbose)
 {
-    assert(0 && "This function must be reimplemented!");
-    //    const uint32_t n_edges = extra.n_edges;
-//    const uint32_t n_points = extra.n_points;
-//    if (n_edges == 0 && n_points == 0) return;
-//
-//    // Forcing-triangle size. It does NOT affect correctness -- the exact BSP pins the edge
-//    // (as the shared crease of two non-coplanar triangles) or the point (as the apex of a
-//    // corner) at any non-zero size. It DOES affect cost: a triangle that reaches a
-//    // neighbouring feature intersects it and multiplies the BSP cells. Experimentally the
-//    // tet count plateaus once the displacement is <= ~0.1x the local feature spacing (below
-//    // that no new intersections are removed), so we use that fraction.
-//    static const double DISP_FACTOR = 0.1;
-//
-//    // The surface triangles are [0, I); everything appended so far (hole caps) and
-//    // everything appended below (edge/point forcing triangles) is non-surface. I can be 0
-//    // (no surface input), so the "unset" sentinel is UINT32_MAX, not 0.
-//    const uint32_t I = (constraints->num_input_triangles == UINT32_MAX)
-//                           ? constraints->num_triangles
-//                           : constraints->num_input_triangles;
-//    constraints->num_input_triangles = I;
-//
-//    // Point displacement: a fraction of the estimated point spacing (density-aware, so it
-//    // scales with how close the points are). Degenerate cases (a single point, or all
-//    // coincident) fall back to the average surface/edge length, else 1. Only used when
-//    // n_points > 0. All sums are in a fixed order so the result is platform-identical.
-//    double point_disp = 0.0;
-//    if (n_points > 0) {
-//        double lo[3] = {extra.point_verts[0], extra.point_verts[1], extra.point_verts[2]};
-//        double hi[3] = {lo[0], lo[1], lo[2]};
-//        for (uint32_t p = 0; p < n_points; p++)
-//            for (int k = 0; k < 3; k++) {
-//                const double c = extra.point_verts[3 * p + k];
-//                if (c < lo[k]) lo[k] = c;
-//                if (c > hi[k]) hi[k] = c;
-//            }
-//        const double diag = std::sqrt(
-//            (hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
-//            (hi[2] - lo[2]) * (hi[2] - lo[2]));
-//        if (n_points > 1 && diag > 0.0) {
-//            point_disp = DISP_FACTOR * diag / std::cbrt((double)n_points);
-//        } else {
-//            // single point / all coincident: use the surface (or edge) average length.
-//            double lspec = 0.0;
-//            uint64_t ec = 0;
-//            for (uint32_t t = 0; t < I; t++)
-//                for (int e = 0; e < 3; e++) {
-//                    const double* p = mesh->vertices[constraints->tri_vertices[3 * t + e]].coord;
-//                    const double* q =
-//                        mesh->vertices[constraints->tri_vertices[3 * t + (e + 1) % 3]].coord;
-//                    const double dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2];
-//                    lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
-//                    ec++;
-//                }
-//            for (uint32_t e = 0; ec == 0 && e < n_edges; e++) {
-//                const double* A = &extra.edge_verts[3 * extra.edge_idx[2 * e]];
-//                const double* B = &extra.edge_verts[3 * extra.edge_idx[2 * e + 1]];
-//                const double dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
-//                lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
-//                ec++;
-//            }
-//            point_disp = (ec && lspec > 0.0) ? DISP_FACTOR * lspec / (double)ec : 1.0;
-//        }
-//        if (!(point_disp > 0.0)) point_disp = 1.0;
-//    }
-//
-//    // Grow the vertex and constraint arrays. Per edge: 2 apex vertices + 2 triangles;
-//    // per point: 1 point vertex + 3 apex vertices + 3 triangles. Edge endpoints come
-//    // from extra.edge_verts (appended once).
-//    const uint32_t nv_add = extra.n_edge_verts + 2 * n_edges + n_points + 3 * n_points;
-//    const uint32_t nt_add = 2 * n_edges + 3 * n_points;
-//    const uint32_t base_v = mesh->numVertices();
-//
-//    const uint32_t base_t = constraints->num_triangles;
-//    mesh->vertices = (vertex_t*)realloc(mesh->vertices, (base_v + nv_add) * sizeof(vertex_t));
-//    constraints->tri_vertices =
-//        (uint32_t*)realloc(constraints->tri_vertices, 3 * (base_t + nt_add) * sizeof(uint32_t));
-//    if (constraints->tri_original_index)
-//        constraints->tri_original_index = (uint32_t*)realloc(
-//            constraints->tri_original_index,
-//            (base_t + nt_add) * sizeof(uint32_t));
-//
-//    // Deduplicate appended vertices against the existing mesh vertices and against each
-//    // other: an exact-duplicate explicit point makes the Delaunay's symbolic perturbation
-//    // fail (real meshes routinely produce coincident forcing-triangle apexes). Reusing a
-//    // coincident vertex is safe -- the two/three forcing triangles still pin their edge /
-//    // point. -0.0 is normalized to 0.0 so it matches +0.0. First occurrence wins, so the
-//    // mapping is deterministic.
-//    auto norm = [](double d) -> double { return d == 0.0 ? 0.0 : d; };
-//    std::unordered_map<std::array<double, 3>, uint32_t, CoordHash> vmap;
-//    vmap.reserve(base_v + nv_add);
-//    for (uint32_t v = 0; v < base_v; v++)
-//        vmap.emplace(
-//            std::array<double, 3>{
-//                norm(mesh->vertices[v].coord[0]),
-//                norm(mesh->vertices[v].coord[1]),
-//                norm(mesh->vertices[v].coord[2])},
-//            v);
-//
-//    uint32_t vi = base_v, ti = base_t;
-//    auto add_vertex = [&](double x, double y, double z) -> uint32_t {
-//        const std::array<double, 3> key = {norm(x), norm(y), norm(z)};
-//        auto it = vmap.find(key);
-//        if (it != vmap.end()) return it->second;
-//        mesh->vertices[vi].coord[0] = x;
-//        mesh->vertices[vi].coord[1] = y;
-//        mesh->vertices[vi].coord[2] = z;
-//        mesh->vertices[vi].original_index = vi;
-//        vmap.emplace(key, vi);
-//        return vi++;
-//    };
-//    auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c) {
-//        constraints->tri_vertices[3 * ti] = a;
-//        constraints->tri_vertices[3 * ti + 1] = b;
-//        constraints->tri_vertices[3 * ti + 2] = c;
-//        if (constraints->tri_original_index) constraints->tri_original_index[ti] = UINT32_MAX;
-//        ti++;
-//    };
-//
-//    // Edge-forcing triangles. The apex is A + |AB|*e_k; the axis with the largest
-//    // |AB| component is dropped (it gives the near-collinear, smallest-area triangle),
-//    // keeping the two largest-area triangles. All decisions use only exact double
-//    // subtraction / abs / compare, so the choice is platform-independent.
-//    // Add the edge endpoints (deduplicated) and remember each one's actual mesh index --
-//    // add_vertex may return an existing index, so they are NOT at contiguous positions.
-//    std::vector<uint32_t> ev_idx(extra.n_edge_verts);
-//    for (uint32_t i = 0; i < extra.n_edge_verts; i++)
-//        ev_idx[i] = add_vertex(
-//            extra.edge_verts[3 * i],
-//            extra.edge_verts[3 * i + 1],
-//            extra.edge_verts[3 * i + 2]);
-//    for (uint32_t e = 0; e < n_edges; e++) {
-//        const uint32_t ia = ev_idx[extra.edge_idx[2 * e]];
-//        const uint32_t ib = ev_idx[extra.edge_idx[2 * e + 1]];
-//        const double* A = mesh->vertices[ia].coord;
-//        const double* B = mesh->vertices[ib].coord;
-//        const double dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
-//        const double L = std::sqrt(dx * dx + dy * dy + dz * dz);
-//        const double adx = std::fabs(dx), ady = std::fabs(dy), adz = std::fabs(dz);
-//        int drop = 0;
-//        double amax = adx;
-//        if (ady > amax) {
-//            drop = 1;
-//            amax = ady;
-//        }
-//        if (adz > amax) drop = 2;
-//        const double Le = L * DISP_FACTOR;
-//        for (int k = 0; k < 3; k++) {
-//            if (k == drop) continue;
-//            double ax = A[0], ay = A[1], az = A[2];
-//            if (k == 0)
-//                ax += Le;
-//            else if (k == 1)
-//                ay += Le;
-//            else
-//                az += Le;
-//            const uint32_t iap = add_vertex(ax, ay, az);
-//            add_tri(ia, ib, iap);
-//        }
-//    }
-//
-//    // Point-forcing triangles: the three faces of the axis-aligned corner at P. Their
-//    // planes are x=Px, y=Py, z=Pz, so they meet exactly at P, pinning it as a vertex.
-//    for (uint32_t p = 0; p < n_points; p++) {
-//        const double px = extra.point_verts[3 * p], py = extra.point_verts[3 * p + 1],
-//                     pz = extra.point_verts[3 * p + 2];
-//        const uint32_t ip = add_vertex(px, py, pz);
-//        const uint32_t iax = add_vertex(px + point_disp, py, pz);
-//        const uint32_t iay = add_vertex(px, py + point_disp, pz);
-//        const uint32_t iaz = add_vertex(px, py, pz + point_disp);
-//        add_tri(ip, iax, iay);
-//        add_tri(ip, iay, iaz);
-//        add_tri(ip, iaz, iax);
-//    }
-//
-//    mesh->num_vertices = vi;
-//    constraints->num_triangles = ti;
-//    constraints->num_edge_triangles = 2 * n_edges;
-//    constraints->num_point_triangles = 3 * n_points;
-//
-//    if (verbose)
-//        printf(
-//            "\tInserted %u edge (%u tris) and %u point (%u tris) features\n",
-//            n_edges,
-//            2 * n_edges,
-//            n_points,
-//            3 * n_points);
+    const uint32_t n_edges = extra.n_edges;
+    const uint32_t n_points = extra.n_points;
+    if (n_edges == 0 && n_points == 0) return;
+
+    // Forcing-triangle size. It does NOT affect correctness -- the exact BSP pins the edge
+    // (as the shared crease of two non-coplanar triangles) or the point (as the apex of a
+    // corner) at any non-zero size. It DOES affect cost: a triangle that reaches a
+    // neighbouring feature intersects it and multiplies the BSP cells. Experimentally the
+    // tet count plateaus once the displacement is <= ~0.1x the local feature spacing (below
+    // that no new intersections are removed), so we use that fraction.
+    static const double DISP_FACTOR = 0.1;
+
+    // The surface triangles are [0, I); everything appended so far (hole caps) and
+    // everything appended below (edge/point forcing triangles) is non-surface. I can be 0
+    // (no surface input), so the "unset" sentinel is UINT32_MAX, not 0.
+    const uint32_t I = (constraints->num_input_triangles == UINT32_MAX)
+                           ? constraints->num_triangles
+                           : constraints->num_input_triangles;
+    constraints->num_input_triangles = I;
+
+    // Point displacement: a fraction of the estimated point spacing (density-aware, so it
+    // scales with how close the points are). Degenerate cases (a single point, or all
+    // coincident) fall back to the average surface/edge length, else 1. Only used when
+    // n_points > 0. All sums are in a fixed order so the result is platform-identical.
+    double point_disp = 0.0;
+    if (n_points > 0) {
+        double lo[3] = {extra.point_verts[0], extra.point_verts[1], extra.point_verts[2]};
+        double hi[3] = {lo[0], lo[1], lo[2]};
+        for (uint32_t p = 0; p < n_points; p++)
+            for (int k = 0; k < 3; k++) {
+                const double c = extra.point_verts[3 * p + k];
+                if (c < lo[k]) lo[k] = c;
+                if (c > hi[k]) hi[k] = c;
+            }
+        const double diag = std::sqrt(
+            (hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+            (hi[2] - lo[2]) * (hi[2] - lo[2]));
+        if (n_points > 1 && diag > 0.0) {
+            point_disp = DISP_FACTOR * diag / std::cbrt((double)n_points);
+        } else {
+            // single point / all coincident: use the surface (or edge) average length.
+            double lspec = 0.0;
+            uint64_t ec = 0;
+            for (uint32_t t = 0; t < I; t++)
+                for (int e = 0; e < 3; e++) {
+                    const pointType& p = mesh->vertices[constraints->tri_vertices[3 * t + e]];
+                    const pointType& q =
+                        mesh->vertices[constraints->tri_vertices[3 * t + (e + 1) % 3]];
+                    const double dx = q.X() - p.X(), dy = q.Y() - p.Y(), dz = q.Z() - p.Z();
+                    lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
+                    ec++;
+                }
+            for (uint32_t e = 0; ec == 0 && e < n_edges; e++) {
+                const double* A = &extra.edge_verts[3 * extra.edge_idx[2 * e]];
+                const double* B = &extra.edge_verts[3 * extra.edge_idx[2 * e + 1]];
+                const double dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
+                lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
+                ec++;
+            }
+            point_disp = (ec && lspec > 0.0) ? DISP_FACTOR * lspec / (double)ec : 1.0;
+        }
+        if (!(point_disp > 0.0)) point_disp = 1.0;
+    }
+
+    // Grow the constraint arrays. Per edge: 2 triangles; per point: 3 triangles. Vertices are
+    // appended below through TetMesh::pushVertex, which -- unlike a bare vertices.push_back --
+    // also grows the parallel inc_tet / marked_vertex arrays and updates the static predicate
+    // filters, all of which tetrahedrize() relies on being sized to numVertices().
+    const uint32_t nv_add = extra.n_edge_verts + 2 * n_edges + n_points + 3 * n_points;
+    const uint32_t nt_add = 2 * n_edges + 3 * n_points;
+    const uint32_t base_v = mesh->numVertices();
+    const uint32_t base_t = constraints->num_triangles;
+    constraints->tri_vertices =
+        (uint32_t*)realloc(constraints->tri_vertices, 3 * (base_t + nt_add) * sizeof(uint32_t));
+    if (constraints->tri_original_index)
+        constraints->tri_original_index = (uint32_t*)realloc(
+            constraints->tri_original_index,
+            (base_t + nt_add) * sizeof(uint32_t));
+
+    // Deduplicate appended vertices against the existing mesh vertices and against each
+    // other: an exact-duplicate explicit point makes the Delaunay's symbolic perturbation
+    // fail (real meshes routinely produce coincident forcing-triangle apexes). Reusing a
+    // coincident vertex is safe -- the two/three forcing triangles still pin their edge /
+    // point. -0.0 is normalized to 0.0 so it matches +0.0. First occurrence wins, so the
+    // mapping is deterministic.
+    auto norm = [](double d) -> double { return d == 0.0 ? 0.0 : d; };
+    std::unordered_map<std::array<double, 3>, uint32_t, CoordHash> vmap;
+    vmap.reserve(base_v + nv_add);
+    for (uint32_t v = 0; v < base_v; v++)
+        vmap.emplace(
+            std::array<double, 3>{
+                norm(mesh->vertices[v].X()),
+                norm(mesh->vertices[v].Y()),
+                norm(mesh->vertices[v].Z())},
+            v);
+
+    uint32_t ti = base_t;
+    auto add_vertex = [&](double x, double y, double z) -> uint32_t {
+        const std::array<double, 3> key = {norm(x), norm(y), norm(z)};
+        auto it = vmap.find(key);
+        if (it != vmap.end()) return it->second;
+        const uint32_t idx = mesh->numVertices();
+        mesh->pushVertex(pointType(x, y, z));
+        vmap.emplace(key, idx);
+        return idx;
+    };
+    auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c) {
+        constraints->tri_vertices[3 * ti] = a;
+        constraints->tri_vertices[3 * ti + 1] = b;
+        constraints->tri_vertices[3 * ti + 2] = c;
+        if (constraints->tri_original_index) constraints->tri_original_index[ti] = UINT32_MAX;
+        ti++;
+    };
+
+    // Edge-forcing triangles. The apex is A + |AB|*e_k; the axis with the largest
+    // |AB| component is dropped (it gives the near-collinear, smallest-area triangle),
+    // keeping the two largest-area triangles. All decisions use only exact double
+    // subtraction / abs / compare, so the choice is platform-independent.
+    // Add the edge endpoints (deduplicated) and remember each one's actual mesh index --
+    // add_vertex may return an existing index, so they are NOT at contiguous positions.
+    std::vector<uint32_t> ev_idx(extra.n_edge_verts);
+    for (uint32_t i = 0; i < extra.n_edge_verts; i++)
+        ev_idx[i] = add_vertex(
+            extra.edge_verts[3 * i],
+            extra.edge_verts[3 * i + 1],
+            extra.edge_verts[3 * i + 2]);
+    for (uint32_t e = 0; e < n_edges; e++) {
+        const uint32_t ia = ev_idx[extra.edge_idx[2 * e]];
+        const uint32_t ib = ev_idx[extra.edge_idx[2 * e + 1]];
+        const pointType A = mesh->vertices[ia];
+        const pointType B = mesh->vertices[ib];
+        const double dx = B.X() - A.X(), dy = B.Y() - A.Y(), dz = B.Z() - A.Z();
+        const double L = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double adx = std::fabs(dx), ady = std::fabs(dy), adz = std::fabs(dz);
+        int drop = 0;
+        double amax = adx;
+        if (ady > amax) {
+            drop = 1;
+            amax = ady;
+        }
+        if (adz > amax) drop = 2;
+        const double Le = L * DISP_FACTOR;
+        for (int k = 0; k < 3; k++) {
+            if (k == drop) continue;
+            double ax = A.X(), ay = A.Y(), az = A.Z();
+            if (k == 0)
+                ax += Le;
+            else if (k == 1)
+                ay += Le;
+            else
+                az += Le;
+            const uint32_t iap = add_vertex(ax, ay, az);
+            add_tri(ia, ib, iap);
+        }
+    }
+
+    // Point-forcing triangles: the three faces of the axis-aligned corner at P. Their
+    // planes are x=Px, y=Py, z=Pz, so they meet exactly at P, pinning it as a vertex.
+    for (uint32_t p = 0; p < n_points; p++) {
+        const double px = extra.point_verts[3 * p], py = extra.point_verts[3 * p + 1],
+                     pz = extra.point_verts[3 * p + 2];
+        const uint32_t ip = add_vertex(px, py, pz);
+        const uint32_t iax = add_vertex(px + point_disp, py, pz);
+        const uint32_t iay = add_vertex(px, py + point_disp, pz);
+        const uint32_t iaz = add_vertex(px, py, pz + point_disp);
+        add_tri(ip, iax, iay);
+        add_tri(ip, iay, iaz);
+        add_tri(ip, iaz, iax);
+    }
+
+    constraints->num_triangles = ti;
+    constraints->num_edge_triangles = 2 * n_edges;
+    constraints->num_point_triangles = 3 * n_points;
+
+    if (verbose)
+        printf(
+            "\tInserted %u edge (%u tris) and %u point (%u tris) features\n",
+            n_edges,
+            2 * n_edges,
+            n_points,
+            3 * n_points);
 }
 
 
