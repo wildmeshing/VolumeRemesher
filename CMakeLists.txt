@@ -143,20 +143,26 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.local.cmake")
 		"and Indirect_Predicates (${indirect_predicates_SOURCE_DIR}) "
 		"and Delaunay3D (${delaunay3d_SOURCE_DIR})")
 else()
+	# Pinned to exact commits for reproducible, byte-identical output across platforms
+	# (moving branch heads would let different CI runners fetch different sources).
 	FetchContent_Declare(nfg
 		GIT_REPOSITORY https://github.com/MarcoAttene/nfg.git
-		GIT_TAG main
+		GIT_TAG a8f7b6f091c97e5b7c7db1761f8f15ea1a8a8894
 		SOURCE_SUBDIR do-not-configure
 	)
 
 	FetchContent_Declare(indirect_predicates
 		GIT_REPOSITORY https://github.com/MarcoAttene/Indirect_Predicates.git
+		GIT_TAG 74960591e0381f85d94bcee603829451f016b4a2
 		SOURCE_SUBDIR do-not-configure
 	)
 
+	# TEMPORARY: pinned to the fork carrying the retetrahedrizeCavity fix
+	# (MarcoAttene/Delaunay3D#1). Repoint to MarcoAttene/Delaunay3D at a tagged commit
+	# once that PR is merged.
 	FetchContent_Declare(Delaunay3D
-		GIT_REPOSITORY https://github.com/MarcoAttene/Delaunay3D.git
-		GIT_TAG main
+		GIT_REPOSITORY https://github.com/danielepanozzo/Delaunay3D.git
+		GIT_TAG 3880df77d413be529fa827379eb8fa529e38791b
 		SOURCE_SUBDIR do-not-configure
 	)
 
