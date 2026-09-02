@@ -260,8 +260,24 @@ void read_MEDIT_file(
 /// <param name="argc"></param>
 /// <param name="argv"></param>
 /// <returns></returns>
+
 int main(int argc, char** argv)
 {
+    bool triangulate = false;
+    bool verbose = false;
+    bool logging = false;
+    bool surfmesh = false;
+    bool blackfaces = false;
+    bool export_rational = false;
+    bool fill_holes = false; // -f: opt-in cap of open boundaries (solid-output path)
+    bool two_d = false; // -2d: run the 2D segment-arrangement pipeline instead
+    bool keep_all_cells = false; // -a: skip in/out min-cut, keep the whole domain
+    char* edge_file = NULL; // -e: extra edges to insert
+    char* point_file = NULL; // -p: extra points to insert
+    char* fileA_name = NULL;
+    char* fileB_name = NULL;
+    char bool_opcode = '0';
+
     if (argc < 2) {
         printf("\nUsage: mesh_generator [-v | -l | -s | -b | -t] [inputfile_A.off] [bool_opcode "
                "inputfile_B.off] [-e edges.off] [-p points.off]\n\n"
@@ -293,21 +309,6 @@ int main(int argc, char** argv)
                "mesh_generator ant.off U pig.off\n");
         return 0;
     }
-
-    bool triangulate = false;
-    bool verbose = false;
-    bool logging = false;
-    bool surfmesh = false;
-    bool blackfaces = false;
-    bool export_rational = false;
-    bool fill_holes = false; // -f: opt-in cap of open boundaries (solid-output path)
-    bool two_d = false; // -2d: run the 2D segment-arrangement pipeline instead
-    bool keep_all_cells = false; // -a: skip in/out min-cut, keep the whole domain
-    char* edge_file = NULL; // -e: extra edges to insert
-    char* point_file = NULL; // -p: extra points to insert
-    char* fileA_name = NULL;
-    char* fileB_name = NULL;
-    char bool_opcode = '0';
 
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {

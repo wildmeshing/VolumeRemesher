@@ -1,15 +1,13 @@
 #ifndef BSP_h
 #define BSP_h
 
-#include <VolumeRemesher/implicit_point.h>
+#include "conforming_mesh.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <array>
 #include <list>
 #include <utility>
 #include <vector>
-#include "conforming_mesh.h"
-#include "delaunay.h"
 
 // BSPface colours:
 // WHITE -> no 2D-intersection with constraints.
@@ -36,6 +34,7 @@
 #define NEW_ENDPTS make_pair(UINT32_MAX, UINT32_MAX)
 
 namespace vol_rem {
+
 class BSPedge
 { // The edge of a BSPcell.
 public:

@@ -1,7 +1,4 @@
 #include "conforming_mesh.h"
-#include <VolumeRemesher/implicit_point.h>
-#include "extended_predicates.h"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -35,7 +32,7 @@
 namespace vol_rem {
 static inline void extract_tetVrts(uint32_t* tet_vrts, uint64_t tet_ind, const TetMesh* mesh)
 {
-    std::memcpy(tet_vrts, mesh->tet_node + 4 * tet_ind, 4 * sizeof(uint32_t));
+    std::memcpy(tet_vrts, mesh->tet_node.data() + 4 * tet_ind, 4 * sizeof(uint32_t));
     // tet_vrts[0] = mesh->tet_node[4*tet_ind    ];
     // tet_vrts[1] = mesh->tet_node[4*tet_ind + 1];
     // tet_vrts[2] = mesh->tet_node[4*tet_ind + 2];
@@ -79,10 +76,10 @@ static inline uint32_t vrt_pointInInnerSegment(
 {
     return (
         pt_ind != endpt0_ind && pt_ind != endpt1_ind &&
-        pointInInnerSegment(
-            mesh->vertices[pt_ind].coord,
-            mesh->vertices[endpt0_ind].coord,
-            mesh->vertices[endpt1_ind].coord));
+        pointType::pointInInnerSegment(
+            mesh->vertices[pt_ind],
+            mesh->vertices[endpt0_ind],
+            mesh->vertices[endpt1_ind]));
 }
 
 static inline uint32_t
@@ -90,10 +87,10 @@ vrt_pointInSegment(uint32_t pt_ind, uint32_t endpt0_ind, uint32_t endpt1_ind, co
 {
     return (
         pt_ind == endpt0_ind || pt_ind == endpt1_ind ||
-        pointInSegment(
-            mesh->vertices[pt_ind].coord,
-            mesh->vertices[endpt0_ind].coord,
-            mesh->vertices[endpt1_ind].coord));
+        pointType::pointInSegment(
+            mesh->vertices[pt_ind],
+            mesh->vertices[endpt0_ind],
+            mesh->vertices[endpt1_ind]));
 }
 
 static inline uint32_t vrt_pointInInnerTriangle(
@@ -105,11 +102,11 @@ static inline uint32_t vrt_pointInInnerTriangle(
 {
     return (
         pt_ind != tri_vrt0_ind && pt_ind != tri_vrt1_ind && pt_ind != tri_vrt2_ind &&
-        pointInInnerTriangle(
-            mesh->vertices[pt_ind].coord,
-            mesh->vertices[tri_vrt0_ind].coord,
-            mesh->vertices[tri_vrt1_ind].coord,
-            mesh->vertices[tri_vrt2_ind].coord));
+        pointType::pointInInnerTriangle(
+            mesh->vertices[pt_ind],
+            mesh->vertices[tri_vrt0_ind],
+            mesh->vertices[tri_vrt1_ind],
+            mesh->vertices[tri_vrt2_ind]));
 }
 
 static inline uint32_t vrt_pointInTriangle(
@@ -121,11 +118,11 @@ static inline uint32_t vrt_pointInTriangle(
 {
     return (
         pt_ind == tri_vrt0_ind || pt_ind == tri_vrt1_ind || pt_ind == tri_vrt2_ind ||
-        pointInTriangle(
-            mesh->vertices[pt_ind].coord,
-            mesh->vertices[tri_vrt0_ind].coord,
-            mesh->vertices[tri_vrt1_ind].coord,
-            mesh->vertices[tri_vrt2_ind].coord));
+        pointType::pointInTriangle(
+            mesh->vertices[pt_ind],
+            mesh->vertices[tri_vrt0_ind],
+            mesh->vertices[tri_vrt1_ind],
+            mesh->vertices[tri_vrt2_ind]));
 }
 
 static inline uint32_t vrt_innerSegmentsCross(
@@ -139,12 +136,13 @@ static inline uint32_t vrt_innerSegmentsCross(
         endpt1sgmA_ind == endpt0sgmB_ind || endpt1sgmA_ind == endpt1sgmB_ind)
         return 0;
 
-    const double* e0A_coord = mesh->vertices[endpt0sgmA_ind].coord;
-    const double* e1A_coord = mesh->vertices[endpt1sgmA_ind].coord;
-    const double* e0B_coord = mesh->vertices[endpt0sgmB_ind].coord;
-    const double* e1B_coord = mesh->vertices[endpt1sgmB_ind].coord;
+    const auto& e0A_coord = mesh->vertices[endpt0sgmA_ind];
+    const auto& e1A_coord = mesh->vertices[endpt1sgmA_ind];
+    const auto& e0B_coord = mesh->vertices[endpt0sgmB_ind];
+    const auto& e1B_coord = mesh->vertices[endpt1sgmB_ind];
 
-    return innerSegmentsCross(e0A_coord, e1A_coord, e0B_coord, e1B_coord);
+    if (pointType::orient3D(e0A_coord, e1A_coord, e0B_coord, e1B_coord) != 0) return 0;
+    return pointType::innerSegmentsCross(e0A_coord, e1A_coord, e0B_coord, e1B_coord);
 }
 
 static inline uint32_t vrt_innerSegmentCrossesInnerTriangle(
@@ -159,12 +157,17 @@ static inline uint32_t vrt_innerSegmentCrossesInnerTriangle(
         endpt1_ind == tri_vrt1_ind || endpt0_ind == tri_vrt2_ind || endpt1_ind == tri_vrt2_ind)
         return 0;
 
-    const double* e0_coord = mesh->vertices[endpt0_ind].coord;
-    const double* e1_coord = mesh->vertices[endpt1_ind].coord;
-    const double* t0_coord = mesh->vertices[tri_vrt0_ind].coord;
-    const double* t1_coord = mesh->vertices[tri_vrt1_ind].coord;
-    const double* t2_coord = mesh->vertices[tri_vrt2_ind].coord;
-    return innerSegmentCrossesInnerTriangle(e0_coord, e1_coord, t0_coord, t1_coord, t2_coord);
+    const auto& e0_coord = mesh->vertices[endpt0_ind];
+    const auto& e1_coord = mesh->vertices[endpt1_ind];
+    const auto& t0_coord = mesh->vertices[tri_vrt0_ind];
+    const auto& t1_coord = mesh->vertices[tri_vrt1_ind];
+    const auto& t2_coord = mesh->vertices[tri_vrt2_ind];
+    return pointType::innerSegmentCrossesInnerTriangle(
+        e0_coord,
+        e1_coord,
+        t0_coord,
+        t1_coord,
+        t2_coord);
 }
 
 static inline uint32_t vrt_innerSegmentCrossesTriangle(
@@ -179,12 +182,12 @@ static inline uint32_t vrt_innerSegmentCrossesTriangle(
         endpt1_ind == tri_vrt1_ind || endpt0_ind == tri_vrt2_ind || endpt1_ind == tri_vrt2_ind)
         return 0;
 
-    const double* e0_coord = mesh->vertices[endpt0_ind].coord;
-    const double* e1_coord = mesh->vertices[endpt1_ind].coord;
-    const double* t0_coord = mesh->vertices[tri_vrt0_ind].coord;
-    const double* t1_coord = mesh->vertices[tri_vrt1_ind].coord;
-    const double* t2_coord = mesh->vertices[tri_vrt2_ind].coord;
-    return innerSegmentCrossesTriangle(e0_coord, e1_coord, t0_coord, t1_coord, t2_coord);
+    const auto& e0_coord = mesh->vertices[endpt0_ind];
+    const auto& e1_coord = mesh->vertices[endpt1_ind];
+    const auto& t0_coord = mesh->vertices[tri_vrt0_ind];
+    const auto& t1_coord = mesh->vertices[tri_vrt1_ind];
+    const auto& t2_coord = mesh->vertices[tri_vrt2_ind];
+    return pointType::innerSegmentCrossesTriangle(e0_coord, e1_coord, t0_coord, t1_coord, t2_coord);
 }
 
 static inline uint32_t vrt_innerTrianglesCrosses(
@@ -229,11 +232,11 @@ vrt_signe_orient3d(uint32_t vrt1, uint32_t vrt2, uint32_t vrt3, uint32_t vrt4, c
         vrt3 == vrt4)
         return 0;
 
-    const double* vrt1_coord = mesh->vertices[vrt1].coord;
-    const double* vrt2_coord = mesh->vertices[vrt2].coord;
-    const double* vrt3_coord = mesh->vertices[vrt3].coord;
-    const double* vrt4_coord = mesh->vertices[vrt4].coord;
-    return signe_orient3d(vrt1_coord, vrt2_coord, vrt3_coord, vrt4_coord);
+    const auto& vrt1_coord = mesh->vertices[vrt1];
+    const auto& vrt2_coord = mesh->vertices[vrt2];
+    const auto& vrt3_coord = mesh->vertices[vrt3];
+    const auto& vrt4_coord = mesh->vertices[vrt4];
+    return pointType::orient3D(vrt1_coord, vrt2_coord, vrt3_coord, vrt4_coord);
 }
 
 // It is assumed that test verices and segment endpoints (that define a
@@ -249,11 +252,22 @@ static inline uint32_t vrt_same_half_plane(
         test_vrt1 == strLine4_vrt1)
         return 0;
 
-    const double* test0_coord = mesh->vertices[test_vrt0].coord;
-    const double* test1_coord = mesh->vertices[test_vrt1].coord;
-    const double* sL0_coord = mesh->vertices[strLine4_vrt0].coord;
-    const double* sL1_coord = mesh->vertices[strLine4_vrt1].coord;
-    return (same_half_plane(test0_coord, test1_coord, sL0_coord, sL1_coord));
+    const auto& test0_coord = mesh->vertices[test_vrt0];
+    const auto& test1_coord = mesh->vertices[test_vrt1];
+    const auto& sL0_coord = mesh->vertices[strLine4_vrt0];
+    const auto& sL1_coord = mesh->vertices[strLine4_vrt1];
+    if (pointType::orient2Dxy(test0_coord, sL0_coord, sL1_coord) !=
+        pointType::orient2Dxy(test1_coord, sL0_coord, sL1_coord))
+        return 0;
+    if (pointType::orient2Dyz(test0_coord, sL0_coord, sL1_coord) !=
+        pointType::orient2Dyz(test1_coord, sL0_coord, sL1_coord))
+        return 0;
+    if (pointType::orient2Dzx(test0_coord, sL0_coord, sL1_coord) !=
+        pointType::orient2Dzx(test1_coord, sL0_coord, sL1_coord))
+        return 0;
+    return 1;
+
+    // return (same_half_plane(test0_coord, test1_coord, sL0_coord, sL1_coord));
 }
 
 //----------------------------
@@ -399,13 +413,14 @@ triangle_is_tetFace(uint32_t v0, uint32_t v1, uint32_t v2, uint64_t tet_ID, cons
 static inline uint32_t
 tet_faceID(uint32_t v0, uint32_t v1, uint32_t v2, uint64_t tet_ID, const TetMesh* mesh)
 {
-    uint32_t* v = mesh->tet_node + tet_ID;
+    const uint32_t* v = mesh->tet_node.data() + tet_ID;
     if (v[0] != v0 && v[0] != v1 && v[0] != v2) return 0;
     if (v[1] != v0 && v[1] != v1 && v[1] != v2) return 1;
     if (v[2] != v0 && v[2] != v1 && v[2] != v2) return 2;
     if (v[3] != v0 && v[3] != v1 && v[3] != v2) return 3;
 
     ip_error("tet_faceID: FATAL ERROR no faces of tet correspond to vertices.\n");
+    return UINT32_MAX;
 }
 
 //  Input: trinagle <v0,v1,v2>,
@@ -420,8 +435,12 @@ bool triangle_in_VT(uint32_t v0, uint32_t v1, uint32_t v2, TetMesh* mesh, uint64
 {
     bool found = false;
     uint64_t num_incTet_v0 = 0, tet_ID;
-    uint64_t* incTet_v0 = NULL;
-    incTet_v0 = mesh->incident_tetrahedra(v0, &num_incTet_v0);
+    // uint64_t* incTet_v0 = NULL;
+
+    std::vector<uint64_t> incTet_v0;
+    mesh->VT(v0, incTet_v0);
+    num_incTet_v0 = incTet_v0.size();
+    // incTet_v0 = mesh->incident_tetrahedra(v0, &num_incTet_v0);
 
     for (uint64_t i = 0; i < num_incTet_v0; i++) {
         tet_ID = 4 * incTet_v0[i];
@@ -432,7 +451,7 @@ bool triangle_in_VT(uint32_t v0, uint32_t v1, uint32_t v2, TetMesh* mesh, uint64
         }
     }
 
-    free(incTet_v0);
+    // free(incTet_v0);
     return found;
 }
 
@@ -444,7 +463,7 @@ bool triangle_in_VT(uint32_t v0, uint32_t v1, uint32_t v2, TetMesh* mesh, uint64
 //         (i.e. the other vertex of tet).
 uint32_t opposite_vertex_face(const TetMesh* mesh, uint64_t tet_ind, const uint32_t* face_vrts)
 {
-    const uint32_t* vp = mesh->tet_node + 4 * tet_ind;
+    const uint32_t* vp = mesh->tet_node.data() + 4 * tet_ind;
     uint32_t v;
     v = *(vp++);
     if (v != face_vrts[0] && v != face_vrts[1] && v != face_vrts[2]) return v;
@@ -620,33 +639,6 @@ int half_edges_compare(const void* void_he1, const void* void_he2)
         return -1;
 }
 
-//  Input: pointer to two half-edges: he1, he2.
-// Output: strict total order — orders by edge endpoints (as half_edges_compare)
-//         and breaks ties by tri_ind.
-// Note. half_edges_compare returns 0 for every half-edge that shares the same
-//       edge endpoints (an edge shared by several constraints). qsort is NOT a
-//       stable sort, so sorting with it left those ties in an implementation-
-//       defined order. place_virtual_constraints then builds each virtual
-//       constraint from the FIRST half-edge of each same-edge group, so the
-//       virtual-constraint apex — and therefore the whole conforming mesh —
-//       depended on the C library's qsort tie-breaking: identical on glibc and
-//       macOS libc, but different on MSVC (which made some models produce a
-//       different tessellation on Windows). Sorting with this total order makes
-//       the representative half-edge (the one with the lowest tri_ind)
-//       deterministic on every platform. The grouping in place_virtual_constraints
-//       still uses the endpoints-only half_edges_compare, which stays correct
-//       because equal-endpoint half-edges remain contiguous after this sort.
-int half_edges_sort_compare(const void* void_he1, const void* void_he2)
-{
-    const int by_endpts = half_edges_compare(void_he1, void_he2);
-    if (by_endpts != 0) return by_endpts;
-    const half_edge_t* he1 = (half_edge_t*)void_he1;
-    const half_edge_t* he2 = (half_edge_t*)void_he2;
-    if (he1->tri_ind > he2->tri_ind) return 1;
-    if (he1->tri_ind < he2->tri_ind) return -1;
-    return 0;
-}
-
 //  Input: pointer to constraints,
 //         pointer to half-edges.
 // Output: fills the array half_edges of struct half_edge_t, for each constraint
@@ -693,6 +685,32 @@ void fill_half_edges(const constraints_t* constraints, half_edge_t* half_edges)
 //         total number of half-edges.
 // Output: by using half_edges return the array of half-edge sorted by
 //         increasing lexicographic order.
+// Output: strict total order — orders by edge endpoints (as half_edges_compare)
+//         and breaks ties by tri_ind.
+// Note. half_edges_compare returns 0 for every half-edge that shares the same
+//       edge endpoints (an edge shared by several constraints). qsort is NOT a
+//       stable sort, so sorting with it left those ties in an implementation-
+//       defined order. place_virtual_constraints then builds each virtual
+//       constraint from the FIRST half-edge of each same-edge group, so the
+//       virtual-constraint apex — and therefore the whole conforming mesh —
+//       depended on the C library's qsort tie-breaking: identical on glibc and
+//       macOS libc, but different on MSVC (which made some models produce a
+//       different tessellation on Windows). Sorting with this total order makes
+//       the representative half-edge (the one with the lowest tri_ind)
+//       deterministic on every platform. The grouping in place_virtual_constraints
+//       still uses the endpoints-only half_edges_compare, which stays correct
+//       because equal-endpoint half-edges remain contiguous after this sort.
+int half_edges_sort_compare(const void* void_he1, const void* void_he2)
+{
+    const int by_endpts = half_edges_compare(void_he1, void_he2);
+    if (by_endpts != 0) return by_endpts;
+    const half_edge_t* he1 = (half_edge_t*)void_he1;
+    const half_edge_t* he2 = (half_edge_t*)void_he2;
+    if (he1->tri_ind > he2->tri_ind) return 1;
+    if (he1->tri_ind < he2->tri_ind) return -1;
+    return 0;
+}
+
 void sort_half_edges(half_edge_t* half_edges, uint32_t num_half_edges)
 {
     // Use a strict total order (endpoints, then tri_ind) so the sort is fully
@@ -723,7 +741,7 @@ void add_virtual_constraint(
     // Find a vertex (u) of a tetrahedron incident in one edge endpoints
     // half_edges[he].endpts[0] (or half_edges[he].endpts[1])
     // not aligned with the vertices of triangle half_edges[he].tri_id
-    const uint64_t tet_ind = mesh->vertices[v0].inc_tet; // non-ghost tet
+    const uint64_t tet_ind = mesh->inc_tet[v0]; // non-ghost tet
     uint32_t u = mesh->tet_node[4 * tet_ind];
     uint32_t k = 0;
 
@@ -780,32 +798,35 @@ bool tri_onSameEdge_allCoPlanar(
     v0 = constraints->tri_vertices[tri_id];
     v1 = constraints->tri_vertices[tri_id + 1];
     v2 = constraints->tri_vertices[tri_id + 2];
-    const double* v0c = mesh->vertices[v0].coord;
-    const double* v1c = mesh->vertices[v1].coord;
-    const double* v2c = mesh->vertices[v2].coord;
+    const auto& v0p = mesh->vertices[v0];
+    const auto& v1p = mesh->vertices[v1];
+    const auto& v2p = mesh->vertices[v2];
     const int dom = genericPoint::maxComponentInTriangleNormal(
-        v0c[0],
-        v0c[1],
-        v0c[2],
-        v1c[0],
-        v1c[1],
-        v1c[2],
-        v2c[0],
-        v2c[1],
-        v2c[2]);
+        v0p.X(),
+        v0p.Y(),
+        v0p.Z(),
+        v1p.X(),
+        v1p.Y(),
+        v1p.Z(),
+        v2p.X(),
+        v2p.Y(),
+        v2p.Z());
 
-    double e0c[2], e1c[2], oc[2];
+    const double base_or =
+        pointType::orient2D(mesh->vertices[hp0], mesh->vertices[hp1], mesh->vertices[u], dom);
 
-    int i, j;
-    for (i = j = 0; i < 3; i++)
-        if (i != dom) {
-            e0c[j] = mesh->vertices[hp0].coord[i];
-            e1c[j] = mesh->vertices[hp1].coord[i];
-            oc[j] = mesh->vertices[u].coord[i];
-            j++;
-        }
+    // double e0c[2], e1c[2], oc[2];
 
-    const double base_or = orient2d(e0c, e1c, oc);
+    // int i, j;
+    // for (i = j = 0; i < 3; i++) if (i != dom)
+    //{
+    //     e0c[j] = mesh->vertices[hp0].coord[i];
+    //     e1c[j] = mesh->vertices[hp1].coord[i];
+    //     oc[j] = mesh->vertices[u].coord[i];
+    //     j++;
+    // }
+    //
+    // const double base_or = orient2d(e0c, e1c, oc);
     const int base_or_sign = (base_or > 0) - (base_or < 0);
 
     for (uint32_t he = he0 + 1; he <= he1; he++) {
@@ -818,9 +839,13 @@ bool tri_onSameEdge_allCoPlanar(
             u = v1;
         else if (hp0 != v2 && hp1 != v2)
             u = v2;
-        for (i = j = 0; i < 3; i++)
-            if (i != dom) oc[j++] = mesh->vertices[u].coord[i];
-        const double new_or = orient2d(e0c, e1c, oc);
+
+        const double new_or =
+            pointType::orient2D(mesh->vertices[hp0], mesh->vertices[hp1], mesh->vertices[u], dom);
+
+        // for (i = j = 0; i < 3; i++) if (i != dom)
+        //     oc[j++] = mesh->vertices[u].coord[i];
+        // const double new_or = orient2d(e0c, e1c, oc);
         const int new_or_sign = (new_or > 0) - (new_or < 0);
         if (new_or_sign != base_or_sign) return false;
     }
@@ -848,7 +873,7 @@ place_virtual_constraints(TetMesh* mesh, constraints_t* constraints, half_edge_t
     uint32_t he = 0; // half-edge index.
     while (he < num_half_edges - 1) {
         uint32_t onSameEdge = 1; // Counts how many constraints are
-        // incident on current half-edge.
+                                 // incident on current half-edge.
         while (he + onSameEdge < num_half_edges &&
                half_edges_compare(&half_edges[he], &half_edges[he + onSameEdge]) == 0)
             onSameEdge++;
@@ -885,432 +910,6 @@ place_virtual_constraints(TetMesh* mesh, constraints_t* constraints, half_edge_t
     free(need_virtual_constraint);
 
     return num_virtual_constraints;
-}
-
-
-/*************************************************************/
-/** hole filling (cap open boundaries with fake triangles)  **/
-/*************************************************************/
-
-namespace {
-
-// Hash of an exact (x,y,z) coordinate, for de-duplicating appended vertices.
-struct CoordHash
-{
-    size_t operator()(const std::array<double, 3>& a) const
-    {
-        uint64_t h = 1469598103934665603ull;
-        for (double d : a) {
-            uint64_t u;
-            std::memcpy(&u, &d, sizeof(u));
-            h = (h ^ u) * 1099511628211ull;
-        }
-        return (size_t)h;
-    }
-};
-
-// Project the 3D coordinate c to 2D by dropping the dominant axis `dom` (0/1/2).
-inline void proj2d(const double* c, int dom, double out[2])
-{
-    int j = 0;
-    for (int i = 0; i < 3; i++)
-        if (i != dom) out[j++] = c[i];
-}
-
-// Is projected point p strictly inside the projected triangle (a,b,c) whose
-// orientation sign is `ori` (+1 or -1)? Uses the exact-sign 2D orientation, so the
-// answer is identical on every platform (points strictly on an edge do not count).
-inline bool
-point_in_tri2d(const double* p, const double* a, const double* b, const double* c, int ori)
-{
-    return signe_orient2d(a, b, p) == ori && signe_orient2d(b, c, p) == ori &&
-           signe_orient2d(c, a, p) == ori;
-}
-
-// Ear-clip one boundary loop (vertex indices, already oriented so the emitted cap
-// triangles carry the reversed boundary half-edges). Appends triangles (3 vertex
-// indices each) to `out`. All geometric decisions use exact-sign predicates so the
-// triangulation is deterministic across platforms. Falls back to a fan for the part
-// it cannot ear-clip (non-simple projection), guaranteeing the hole is capped.
-void ear_clip_loop(const std::vector<uint32_t>& loop, const TetMesh* mesh, std::vector<uint32_t>& out)
-{
-    const uint32_t k = (uint32_t)loop.size();
-    if (k < 3) return;
-
-    // Choose a projection plane from three spread-out loop vertices (exact, so the
-    // choice is platform-independent).
-    const double* A = mesh->vertices[loop[0]].coord;
-    const double* B = mesh->vertices[loop[k / 3]].coord;
-    const double* C = mesh->vertices[loop[2 * k / 3]].coord;
-    int dom = genericPoint::maxComponentInTriangleNormal(
-        A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2]);
-    if (dom < 0 || dom > 2) dom = 2;
-
-    std::vector<std::array<double, 2>> P(k);
-    for (uint32_t i = 0; i < k; i++) proj2d(mesh->vertices[loop[i]].coord, dom, P[i].data());
-
-    // Orientation of the projected polygon: the lexicographically-smallest vertex is
-    // a convex hull vertex, so the orient2d sign of its wedge is the polygon's sign.
-    uint32_t ex = 0;
-    for (uint32_t i = 1; i < k; i++) {
-        if (P[i][0] < P[ex][0] ||
-            (P[i][0] == P[ex][0] &&
-             (P[i][1] < P[ex][1] || (P[i][1] == P[ex][1] && loop[i] < loop[ex]))))
-            ex = i;
-    }
-    const int poly_ori =
-        signe_orient2d(P[(ex + k - 1) % k].data(), P[ex].data(), P[(ex + 1) % k].data());
-
-    // Doubly-linked list over the loop vertices for O(n^2) ear removal.
-    std::vector<uint32_t> nxt(k), prv(k);
-    for (uint32_t i = 0; i < k; i++) {
-        nxt[i] = (i + 1) % k;
-        prv[i] = (i + k - 1) % k;
-    }
-    uint32_t remaining = k, cur = 0;
-
-    if (poly_ori != 0) {
-        uint32_t stall = 0;
-        while (remaining > 3 && stall <= remaining) {
-            const uint32_t p = prv[cur], n = nxt[cur];
-            bool ear = signe_orient2d(P[p].data(), P[cur].data(), P[n].data()) == poly_ori;
-            if (ear)
-                for (uint32_t j = nxt[n]; j != p; j = nxt[j])
-                    if (point_in_tri2d(
-                            P[j].data(), P[p].data(), P[cur].data(), P[n].data(), poly_ori)) {
-                        ear = false;
-                        break;
-                    }
-            if (ear) {
-                out.push_back(loop[p]);
-                out.push_back(loop[cur]);
-                out.push_back(loop[n]);
-                nxt[p] = n;
-                prv[n] = p;
-                remaining--;
-                cur = p;
-                stall = 0;
-            } else {
-                cur = nxt[cur];
-                stall++;
-            }
-        }
-    }
-
-    // Fan-triangulate whatever is left (the final triangle in the normal case, or the
-    // remaining polygon if ear removal stalled on a non-simple projection).
-    std::vector<uint32_t> rem;
-    uint32_t it = cur;
-    do {
-        rem.push_back(it);
-        it = nxt[it];
-    } while (it != cur);
-    for (size_t i = 1; i + 1 < rem.size(); i++) {
-        out.push_back(loop[rem[0]]);
-        out.push_back(loop[rem[i]]);
-        out.push_back(loop[rem[i + 1]]);
-    }
-}
-
-} // namespace
-
-uint32_t fill_holes_in_constraints(constraints_t* constraints, const TetMesh* mesh, bool verbose)
-{
-    const uint32_t n_input = constraints->num_triangles;
-    constraints->num_input_triangles = n_input;
-    if (n_input == 0) return 0;
-
-    // Find the topological boundary: undirected edges used by exactly one triangle.
-    // Using the UNDIRECTED count (rather than "a->b present but b->a absent") makes
-    // this robust to inconsistently-oriented input, where an interior edge shared by
-    // two equally-wound triangles would otherwise look like two boundary half-edges.
-    // Each boundary edge is used by a single triangle, so its one directed occurrence
-    // gives a well-defined half-edge direction (and hence a consistent cap winding for
-    // consistently-oriented input).
-    std::map<std::pair<uint32_t, uint32_t>, uint32_t> ucount; // sorted pair -> use count
-    std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> udir; // -> directed
-    for (uint32_t t = 0; t < n_input; t++)
-        for (int e = 0; e < 3; e++) {
-            const uint32_t a = constraints->tri_vertices[3 * t + e];
-            const uint32_t b = constraints->tri_vertices[3 * t + (e + 1) % 3];
-            std::pair<uint32_t, uint32_t> key = a < b ? std::make_pair(a, b) : std::make_pair(b, a);
-            ucount[key]++;
-            udir[key] = {a, b};
-        }
-
-    // Boundary half-edges, grouped by start vertex (sorted -> deterministic walk).
-    std::map<uint32_t, std::vector<uint32_t>> adj;
-    std::set<std::pair<uint32_t, uint32_t>> boundary;
-    for (const auto& kv : ucount)
-        if (kv.second == 1) {
-            const std::pair<uint32_t, uint32_t>& e = udir[kv.first];
-            adj[e.first].push_back(e.second);
-            boundary.insert(e);
-        }
-    if (boundary.empty()) {
-        if (verbose) printf("\tNo holes to fill (input surface is closed)\n");
-        return 0;
-    }
-
-    // Chain boundary half-edges into loops and cap each one.
-    std::set<std::pair<uint32_t, uint32_t>> used;
-    std::vector<uint32_t> cap_tris; // flat: 3 vertex indices per cap triangle
-    uint32_t num_loops = 0;
-    for (const auto& start : boundary) {
-        if (used.count(start)) continue;
-        std::vector<uint32_t> loop;
-        uint32_t a = start.first, b = start.second;
-        used.insert({a, b});
-        loop.push_back(a);
-        // Follow next boundary half-edges until we return to the start (or dead-end).
-        for (uint32_t guard = 0; guard <= (uint32_t)boundary.size(); guard++) {
-            loop.push_back(b);
-            if (b == start.first) break;
-            const auto ait = adj.find(b);
-            uint32_t nb = UINT32_MAX;
-            if (ait != adj.end())
-                for (uint32_t cand : ait->second)
-                    if (!used.count({b, cand})) {
-                        nb = cand;
-                        break;
-                    }
-            if (nb == UINT32_MAX) break; // open chain (non-manifold boundary): best effort
-            used.insert({b, nb});
-            b = nb;
-        }
-        // loop currently is [a, ..., a]; drop the duplicated closing vertex.
-        if (loop.size() >= 2 && loop.front() == loop.back()) loop.pop_back();
-        if (loop.size() < 3) continue;
-        // Reverse so the caps carry the reversed boundary half-edges (manifold-consistent).
-        std::reverse(loop.begin(), loop.end());
-        ear_clip_loop(loop, mesh, cap_tris);
-        num_loops++;
-    }
-
-    // Drop degenerate (collinear) caps: they are zero-area and would be rejected as
-    // constraints. The corresponding boundary stays open and is handled downstream by
-    // place_virtual_constraints exactly as before, so this degrades gracefully.
-    std::vector<uint32_t> kept;
-    kept.reserve(cap_tris.size());
-    for (size_t i = 0; i + 3 <= cap_tris.size(); i += 3) {
-        const double* v0 = mesh->vertices[cap_tris[i]].coord;
-        const double* v1 = mesh->vertices[cap_tris[i + 1]].coord;
-        const double* v2 = mesh->vertices[cap_tris[i + 2]].coord;
-        if (misAlignment(v0, v1, v2)) {
-            kept.push_back(cap_tris[i]);
-            kept.push_back(cap_tris[i + 1]);
-            kept.push_back(cap_tris[i + 2]);
-        }
-    }
-    const uint32_t n_cap = (uint32_t)(kept.size() / 3);
-    if (n_cap == 0) {
-        if (verbose)
-            printf("\t%u hole loop(s) found but produced no usable caps\n", num_loops);
-        return 0;
-    }
-
-    // Append the cap constraints after the real input constraints.
-    const uint32_t n_total = n_input + n_cap;
-    constraints->tri_vertices = (uint32_t*)realloc(
-        constraints->tri_vertices, 3 * n_total * sizeof(uint32_t));
-    for (uint32_t i = 0; i < 3 * n_cap; i++)
-        constraints->tri_vertices[3 * n_input + i] = kept[i];
-    if (constraints->tri_original_index) {
-        constraints->tri_original_index = (uint32_t*)realloc(
-            constraints->tri_original_index, n_total * sizeof(uint32_t));
-        for (uint32_t i = 0; i < n_cap; i++)
-            constraints->tri_original_index[n_input + i] = UINT32_MAX; // caps: no input index
-    }
-    constraints->num_triangles = n_total;
-
-    if (verbose)
-        printf("\tFilled %u hole loop(s) with %u cap triangles\n", num_loops, n_cap);
-    return n_cap;
-}
-
-void insert_edges_and_points(
-    constraints_t* constraints, TetMesh* mesh, const extra_features_t& extra, bool verbose)
-{
-    const uint32_t n_edges = extra.n_edges;
-    const uint32_t n_points = extra.n_points;
-    if (n_edges == 0 && n_points == 0) return;
-
-    // Forcing-triangle size. It does NOT affect correctness -- the exact BSP pins the edge
-    // (as the shared crease of two non-coplanar triangles) or the point (as the apex of a
-    // corner) at any non-zero size. It DOES affect cost: a triangle that reaches a
-    // neighbouring feature intersects it and multiplies the BSP cells. Experimentally the
-    // tet count plateaus once the displacement is <= ~0.1x the local feature spacing (below
-    // that no new intersections are removed), so we use that fraction.
-    static const double DISP_FACTOR = 0.1;
-
-    // The surface triangles are [0, I); everything appended so far (hole caps) and
-    // everything appended below (edge/point forcing triangles) is non-surface. I can be 0
-    // (no surface input), so the "unset" sentinel is UINT32_MAX, not 0.
-    const uint32_t I = (constraints->num_input_triangles == UINT32_MAX)
-        ? constraints->num_triangles
-        : constraints->num_input_triangles;
-    constraints->num_input_triangles = I;
-
-    // Point displacement: a fraction of the estimated point spacing (density-aware, so it
-    // scales with how close the points are). Degenerate cases (a single point, or all
-    // coincident) fall back to the average surface/edge length, else 1. Only used when
-    // n_points > 0. All sums are in a fixed order so the result is platform-identical.
-    double point_disp = 0.0;
-    if (n_points > 0) {
-        double lo[3] = {extra.point_verts[0], extra.point_verts[1], extra.point_verts[2]};
-        double hi[3] = {lo[0], lo[1], lo[2]};
-        for (uint32_t p = 0; p < n_points; p++)
-            for (int k = 0; k < 3; k++) {
-                const double c = extra.point_verts[3 * p + k];
-                if (c < lo[k]) lo[k] = c;
-                if (c > hi[k]) hi[k] = c;
-            }
-        const double diag = std::sqrt(
-            (hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
-            (hi[2] - lo[2]) * (hi[2] - lo[2]));
-        if (n_points > 1 && diag > 0.0) {
-            point_disp = DISP_FACTOR * diag / std::cbrt((double)n_points);
-        } else {
-            // single point / all coincident: use the surface (or edge) average length.
-            double lspec = 0.0;
-            uint64_t ec = 0;
-            for (uint32_t t = 0; t < I; t++)
-                for (int e = 0; e < 3; e++) {
-                    const double* p = mesh->vertices[constraints->tri_vertices[3 * t + e]].coord;
-                    const double* q =
-                        mesh->vertices[constraints->tri_vertices[3 * t + (e + 1) % 3]].coord;
-                    const double dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2];
-                    lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
-                    ec++;
-                }
-            for (uint32_t e = 0; ec == 0 && e < n_edges; e++) {
-                const double* A = &extra.edge_verts[3 * extra.edge_idx[2 * e]];
-                const double* B = &extra.edge_verts[3 * extra.edge_idx[2 * e + 1]];
-                const double dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
-                lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
-                ec++;
-            }
-            point_disp = (ec && lspec > 0.0) ? DISP_FACTOR * lspec / (double)ec : 1.0;
-        }
-        if (!(point_disp > 0.0)) point_disp = 1.0;
-    }
-
-    // Grow the vertex and constraint arrays. Per edge: 2 apex vertices + 2 triangles;
-    // per point: 1 point vertex + 3 apex vertices + 3 triangles. Edge endpoints come
-    // from extra.edge_verts (appended once).
-    const uint32_t nv_add = extra.n_edge_verts + 2 * n_edges + n_points + 3 * n_points;
-    const uint32_t nt_add = 2 * n_edges + 3 * n_points;
-    const uint32_t base_v = mesh->num_vertices;
-    const uint32_t base_t = constraints->num_triangles;
-    mesh->vertices = (vertex_t*)realloc(mesh->vertices, (base_v + nv_add) * sizeof(vertex_t));
-    constraints->tri_vertices =
-        (uint32_t*)realloc(constraints->tri_vertices, 3 * (base_t + nt_add) * sizeof(uint32_t));
-    if (constraints->tri_original_index)
-        constraints->tri_original_index =
-            (uint32_t*)realloc(constraints->tri_original_index, (base_t + nt_add) * sizeof(uint32_t));
-
-    // Deduplicate appended vertices against the existing mesh vertices and against each
-    // other: an exact-duplicate explicit point makes the Delaunay's symbolic perturbation
-    // fail (real meshes routinely produce coincident forcing-triangle apexes). Reusing a
-    // coincident vertex is safe -- the two/three forcing triangles still pin their edge /
-    // point. -0.0 is normalized to 0.0 so it matches +0.0. First occurrence wins, so the
-    // mapping is deterministic.
-    auto norm = [](double d) -> double { return d == 0.0 ? 0.0 : d; };
-    std::unordered_map<std::array<double, 3>, uint32_t, CoordHash> vmap;
-    vmap.reserve(base_v + nv_add);
-    for (uint32_t v = 0; v < base_v; v++)
-        vmap.emplace(
-            std::array<double, 3>{
-                norm(mesh->vertices[v].coord[0]), norm(mesh->vertices[v].coord[1]),
-                norm(mesh->vertices[v].coord[2])},
-            v);
-
-    uint32_t vi = base_v, ti = base_t;
-    auto add_vertex = [&](double x, double y, double z) -> uint32_t {
-        const std::array<double, 3> key = {norm(x), norm(y), norm(z)};
-        auto it = vmap.find(key);
-        if (it != vmap.end()) return it->second;
-        mesh->vertices[vi].coord[0] = x;
-        mesh->vertices[vi].coord[1] = y;
-        mesh->vertices[vi].coord[2] = z;
-        mesh->vertices[vi].original_index = vi;
-        vmap.emplace(key, vi);
-        return vi++;
-    };
-    auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c) {
-        constraints->tri_vertices[3 * ti] = a;
-        constraints->tri_vertices[3 * ti + 1] = b;
-        constraints->tri_vertices[3 * ti + 2] = c;
-        if (constraints->tri_original_index) constraints->tri_original_index[ti] = UINT32_MAX;
-        ti++;
-    };
-
-    // Edge-forcing triangles. The apex is A + |AB|*e_k; the axis with the largest
-    // |AB| component is dropped (it gives the near-collinear, smallest-area triangle),
-    // keeping the two largest-area triangles. All decisions use only exact double
-    // subtraction / abs / compare, so the choice is platform-independent.
-    // Add the edge endpoints (deduplicated) and remember each one's actual mesh index --
-    // add_vertex may return an existing index, so they are NOT at contiguous positions.
-    std::vector<uint32_t> ev_idx(extra.n_edge_verts);
-    for (uint32_t i = 0; i < extra.n_edge_verts; i++)
-        ev_idx[i] = add_vertex(
-            extra.edge_verts[3 * i], extra.edge_verts[3 * i + 1], extra.edge_verts[3 * i + 2]);
-    for (uint32_t e = 0; e < n_edges; e++) {
-        const uint32_t ia = ev_idx[extra.edge_idx[2 * e]];
-        const uint32_t ib = ev_idx[extra.edge_idx[2 * e + 1]];
-        const double* A = mesh->vertices[ia].coord;
-        const double* B = mesh->vertices[ib].coord;
-        const double dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
-        const double L = std::sqrt(dx * dx + dy * dy + dz * dz);
-        const double adx = std::fabs(dx), ady = std::fabs(dy), adz = std::fabs(dz);
-        int drop = 0;
-        double amax = adx;
-        if (ady > amax) {
-            drop = 1;
-            amax = ady;
-        }
-        if (adz > amax) drop = 2;
-        const double Le = L * DISP_FACTOR;
-        for (int k = 0; k < 3; k++) {
-            if (k == drop) continue;
-            double ax = A[0], ay = A[1], az = A[2];
-            if (k == 0)
-                ax += Le;
-            else if (k == 1)
-                ay += Le;
-            else
-                az += Le;
-            const uint32_t iap = add_vertex(ax, ay, az);
-            add_tri(ia, ib, iap);
-        }
-    }
-
-    // Point-forcing triangles: the three faces of the axis-aligned corner at P. Their
-    // planes are x=Px, y=Py, z=Pz, so they meet exactly at P, pinning it as a vertex.
-    for (uint32_t p = 0; p < n_points; p++) {
-        const double px = extra.point_verts[3 * p], py = extra.point_verts[3 * p + 1],
-                     pz = extra.point_verts[3 * p + 2];
-        const uint32_t ip = add_vertex(px, py, pz);
-        const uint32_t iax = add_vertex(px + point_disp, py, pz);
-        const uint32_t iay = add_vertex(px, py + point_disp, pz);
-        const uint32_t iaz = add_vertex(px, py, pz + point_disp);
-        add_tri(ip, iax, iay);
-        add_tri(ip, iay, iaz);
-        add_tri(ip, iaz, iax);
-    }
-
-    mesh->num_vertices = vi;
-    constraints->num_triangles = ti;
-    constraints->num_edge_triangles = 2 * n_edges;
-    constraints->num_point_triangles = 3 * n_points;
-
-    if (verbose)
-        printf(
-            "\tInserted %u edge (%u tris) and %u point (%u tris) features\n",
-            n_edges,
-            2 * n_edges,
-            n_points,
-            3 * n_points);
 }
 
 
@@ -1397,13 +996,12 @@ uint32_t intersectionClass_tetEdge_constr(
         // IF the 2 vertices of tet-edge vestices belong to
         // the constraint (boundary included) -> PROPER INTERSECTION.
         if (tE0_in && tE1_in) return 0;
-        // At least one vertices between tE_vrts[0] and tE_vrts[1] must stay in the
-        // the constraint (otherwise there will be no intersection - IMPOSSIBLE)
+// At least one vertices between tE_vrts[0] and tE_vrts[1] must stay in the
+// the constraint (otherwise there will be no intersection - IMPOSSIBLE)
 #ifdef DEBUG
         if (!tE0_in && !tE1_in)
-            printf(
-                "[conforming_mesh.c]intersectionClass_tetEdge_constr: ERROR "
-                "there is no intersection.\n");
+            printf("[conforming_mesh.c]intersectionClass_tetEdge_constr: ERROR "
+                   "there is no intersection.\n");
 #endif
 
         // Note. a constraint vertex cannot stay in the interior of the edge
@@ -1420,7 +1018,7 @@ uint32_t intersectionClass_tetEdge_constr(
         // PROPER INTERSECTION.
         return 0;
     } else { // opptE_same_or == 0 ->
-        // <opptE_vrts[0],opptE_vrts[1]> crosses constraint-plane
+             // <opptE_vrts[0],opptE_vrts[1]> crosses constraint-plane
 
         // IF at least one between tE_vrts[0] and tE_vrts[1] lie in the constraint
         // interior (no boundary)
@@ -1798,9 +1396,10 @@ void find_improperIntersection(
             if (or_tet_v[i] == 0) num_coplan_v++;
 
         // Case: a tet-face lies on the constraint plane.
-        if (num_coplan_v == 3) { // For BSP cuts mapping these kind of intersections are usless,
-            // by the way they are used to split BSPfaces that partially
-            // (2D)overlap with a constraint. So, we map them with extra symbols.
+        if (num_coplan_v ==
+            3) { // For BSP cuts mapping these kind of intersections are usless,
+                 // by the way they are used to split BSPfaces that partially
+                 // (2D)overlap with a constraint. So, we map them with extra symbols.
             uint32_t k = 0;
             for (uint32_t i = 0; i < 4; i++)
                 if (or_tet_v[i] == 0)
@@ -2394,9 +1993,12 @@ uint64_t* intersections_TetVrtOnConstraintSide(
     //   (3) (v_curr,v_stop) intersects n tetrahedra along a common edge.
     //   (3') like 3), but the other endpoint of the common edge is v_stop.
 
-    uint64_t num_incTet;
-    uint64_t* incTet = mesh->incident_tetrahedra(v_curr, &num_incTet);
-    // ghost-tets are NOT returned.
+    std::vector<uint64_t> incTet;
+    mesh->VT(v_curr, incTet);
+
+    uint64_t num_incTet = incTet.size();
+    // uint64_t* incTet = mesh->incident_tetrahedra(v_curr, &num_incTet);
+    //  ghost-tets are NOT returned.
 
     // Not already visited tet_
     uint64_t num_newTetIn_incTet = 0;
@@ -2413,7 +2015,7 @@ uint64_t* intersections_TetVrtOnConstraintSide(
 
     uint64_t tet_ind;
     uint32_t v_oppf_inds[3]; // Indices of the vertices of
-    // the face opposite to v_curr.
+                             // the face opposite to v_curr.
 
     for (uint64_t i = 0; i < num_incTet; i++) {
         tet_ind = incTet[i];
@@ -2502,8 +2104,8 @@ uint64_t* intersections_TetVrtOnConstraintSide(
     // In case (3') return the tetrahedron itself.
     *nextTet_ind = tet_ind;
 
-    free(incTet);
-    incTet = NULL;
+    // free(incTet);
+    // incTet = NULL;
     return newTetIn_incTet;
 }
 
@@ -2560,9 +2162,12 @@ uint64_t* intersections_TetEdgeCrossConstraintSide(
     //   (4) (v_start,v_stop) intersects exactly 2 tetrahedra along a common
     //       face and cuts one the edge (different from tet_cutted_edge)
     //       of that face.
+    std::vector<uint64_t> incTet;
+    mesh->ETfull(tet_cutted_edge[0], tet_cutted_edge[1], incTet);
 
-    uint64_t num_incTet;
-    uint64_t* incTet = mesh->ETrelation(tet_cutted_edge, *nextTet_ind, &num_incTet);
+    uint64_t num_incTet = incTet.size();
+    // uint64_t* incTet = mesh->ETrelation(tet_cutted_edge,
+    //                               *nextTet_ind, &num_incTet);
 
     // Not already visited tet_
     uint64_t num_newTetIn_incTet = 0;
@@ -2584,7 +2189,7 @@ uint64_t* intersections_TetEdgeCrossConstraintSide(
 
     uint64_t tet_ind;
     uint32_t v_oppe_inds[2]; // Indices of the endpoints of the edge
-    // opposite to tet_cutted_edge.
+                             // opposite to tet_cutted_edge.
     for (uint64_t ind = 0; ind < num_incTet; ind++) {
         tet_ind = incTet[ind];
 
@@ -2792,8 +2397,8 @@ uint64_t* intersections_TetEdgeCrossConstraintSide(
     // In case (3') return the tetrahedron itself.
     *nextTet_ind = tet_ind;
 
-    free(incTet);
-    incTet = NULL;
+    // free(incTet);
+    // incTet = NULL;
     return newTetIn_incTet;
 }
 
@@ -3320,7 +2925,7 @@ uint64_t constrInterior_count(
     uint32_t* mark_TetIntersection)
 {
     uint64_t num_tets_intersects = 1; // tet intersects (only)
-    // the interior of the constraint.
+                                      // the interior of the constraint.
 
     // Cycle over the tetrahedra adjacent to tet.
     for (uint64_t i = 0; i < 4; i++) {
@@ -3478,7 +3083,7 @@ static inline void
 compile_map_fi(uint32_t tri_ind, uint64_t tet_ind, uint32_t* num_map_fi, uint32_t** map_fi)
 {
     num_map_fi[tet_ind]++; // The number of overlapping constraints increases
-    // for the tetrahedron tet_ind face_i.
+                           // for the tetrahedron tet_ind face_i.
 
     if (num_map_fi[tet_ind] == 1) // It is the first overlapping constraint.
         map_fi[tet_ind] = (uint32_t*)malloc(sizeof(uint32_t));
@@ -3624,7 +3229,7 @@ void insert_constraints(
     // - faces (2D)overlapping with constraints, wherever its the face opposite
     //   to vertex j=0,1,2 or 3...
     //      -> marked as OVERLAP2D_Fj
-    uint32_t* mark_TetIntersection = (uint32_t*)calloc(mesh->tet_num, sizeof(uint32_t));
+    uint32_t* mark_TetIntersection = (uint32_t*)calloc(mesh->numTets(), sizeof(uint32_t));
 
     // Search interections on each constraint.
     for (uint32_t tri_ind = 0; tri_ind < constraints->num_triangles; tri_ind++) {
@@ -3639,7 +3244,6 @@ void insert_constraints(
         // incident in v0. In this case there is a proper intersection,
         // but there is a (2D)overlapping.
         uint64_t tet_face_ind = UINT64_MAX;
-
         if (triangle_in_VT(v[0], v[1], v[2], mesh, &tet_face_ind) == 1) {
             const uint64_t ng = mesh->tet_neigh[tet_face_ind];
             compile_tetfFaces_map(
@@ -3672,6 +3276,7 @@ void insert_constraints(
         // the constraint, properly or improperly.
         uint64_t num_intersecatedTet = 0;
         uint64_t* intersecatedTet = NULL;
+
         // ---STEP 1--- [Intersections with the BOUNDARY of the constraint]
         intersections_constraint_sides(
             mesh,
@@ -3719,4 +3324,453 @@ void insert_constraints(
     free(mark_TetIntersection);
     mark_TetIntersection = NULL;
 }
+
+
+
+
+/*************************************************************/
+/** hole filling (cap open boundaries with fake triangles)  **/
+/*************************************************************/
+
+namespace {
+
+// Hash of an exact (x,y,z) coordinate, for de-duplicating appended vertices.
+struct CoordHash
+{
+    size_t operator()(const std::array<double, 3>& a) const
+    {
+        uint64_t h = 1469598103934665603ull;
+        for (double d : a) {
+            uint64_t u;
+            std::memcpy(&u, &d, sizeof(u));
+            h = (h ^ u) * 1099511628211ull;
+        }
+        return (size_t)h;
+    }
+};
+
+// Project the 3D coordinate c to 2D by dropping the dominant axis `dom` (0/1/2).
+inline void proj2d(const double* c, int dom, double out[2])
+{
+    int j = 0;
+    for (int i = 0; i < 3; i++)
+        if (i != dom) out[j++] = c[i];
+}
+
+// Prototype conversion for basic geometric predicates
+inline int signe_orient2d(const double* a, const double* b, const double* c)
+{
+    return orient2d(a[0], a[1], b[0], b[1], c[0], c[1]);
+}
+
+// Is projected point p strictly inside the projected triangle (a,b,c) whose
+// orientation sign is `ori` (+1 or -1)? Uses the exact-sign 2D orientation, so the
+// answer is identical on every platform (points strictly on an edge do not count).
+inline bool
+point_in_tri2d(const double* p, const double* a, const double* b, const double* c, int ori)
+{
+    return signe_orient2d(a, b, p) == ori && signe_orient2d(b, c, p) == ori &&
+           signe_orient2d(c, a, p) == ori;
+}
+
+// Ear-clip one boundary loop (vertex indices, already oriented so the emitted cap
+// triangles carry the reversed boundary half-edges). Appends triangles (3 vertex
+// indices each) to `out`. All geometric decisions use exact-sign predicates so the
+// triangulation is deterministic across platforms. Falls back to a fan for the part
+// it cannot ear-clip (non-simple projection), guaranteeing the hole is capped.
+void ear_clip_loop(
+    const std::vector<uint32_t>& loop,
+    const TetMesh* mesh,
+    std::vector<uint32_t>& out)
+{
+    const uint32_t k = (uint32_t)loop.size();
+    if (k < 3) return;
+
+    // Choose a projection plane from three spread-out loop vertices (exact, so the
+    // choice is platform-independent).
+    const double* A = mesh->vertices[loop[0]].coord;
+    const double* B = mesh->vertices[loop[k / 3]].coord;
+    const double* C = mesh->vertices[loop[2 * k / 3]].coord;
+    int dom = genericPoint::maxComponentInTriangleNormal(
+        A[0],
+        A[1],
+        A[2],
+        B[0],
+        B[1],
+        B[2],
+        C[0],
+        C[1],
+        C[2]);
+    if (dom < 0 || dom > 2) dom = 2;
+
+    std::vector<std::array<double, 2>> P(k);
+    for (uint32_t i = 0; i < k; i++) proj2d(mesh->vertices[loop[i]].coord, dom, P[i].data());
+
+    // Orientation of the projected polygon: the lexicographically-smallest vertex is
+    // a convex hull vertex, so the orient2d sign of its wedge is the polygon's sign.
+    uint32_t ex = 0;
+    for (uint32_t i = 1; i < k; i++) {
+        if (P[i][0] < P[ex][0] ||
+            (P[i][0] == P[ex][0] &&
+             (P[i][1] < P[ex][1] || (P[i][1] == P[ex][1] && loop[i] < loop[ex]))))
+            ex = i;
+    }
+    const int poly_ori =
+        signe_orient2d(P[(ex + k - 1) % k].data(), P[ex].data(), P[(ex + 1) % k].data());
+
+    // Doubly-linked list over the loop vertices for O(n^2) ear removal.
+    std::vector<uint32_t> nxt(k), prv(k);
+    for (uint32_t i = 0; i < k; i++) {
+        nxt[i] = (i + 1) % k;
+        prv[i] = (i + k - 1) % k;
+    }
+    uint32_t remaining = k, cur = 0;
+
+    if (poly_ori != 0) {
+        uint32_t stall = 0;
+        while (remaining > 3 && stall <= remaining) {
+            const uint32_t p = prv[cur], n = nxt[cur];
+            bool ear = signe_orient2d(P[p].data(), P[cur].data(), P[n].data()) == poly_ori;
+            if (ear)
+                for (uint32_t j = nxt[n]; j != p; j = nxt[j])
+                    if (point_in_tri2d(
+                            P[j].data(),
+                            P[p].data(),
+                            P[cur].data(),
+                            P[n].data(),
+                            poly_ori)) {
+                        ear = false;
+                        break;
+                    }
+            if (ear) {
+                out.push_back(loop[p]);
+                out.push_back(loop[cur]);
+                out.push_back(loop[n]);
+                nxt[p] = n;
+                prv[n] = p;
+                remaining--;
+                cur = p;
+                stall = 0;
+            } else {
+                cur = nxt[cur];
+                stall++;
+            }
+        }
+    }
+
+    // Fan-triangulate whatever is left (the final triangle in the normal case, or the
+    // remaining polygon if ear removal stalled on a non-simple projection).
+    std::vector<uint32_t> rem;
+    uint32_t it = cur;
+    do {
+        rem.push_back(it);
+        it = nxt[it];
+    } while (it != cur);
+    for (size_t i = 1; i + 1 < rem.size(); i++) {
+        out.push_back(loop[rem[0]]);
+        out.push_back(loop[rem[i]]);
+        out.push_back(loop[rem[i + 1]]);
+    }
+}
+
+} // namespace
+
+uint32_t fill_holes_in_constraints(constraints_t* constraints, const TetMesh* mesh, bool verbose)
+{
+    const uint32_t n_input = constraints->num_triangles;
+    constraints->num_input_triangles = n_input;
+    if (n_input == 0) return 0;
+
+    // Find the topological boundary: undirected edges used by exactly one triangle.
+    // Using the UNDIRECTED count (rather than "a->b present but b->a absent") makes
+    // this robust to inconsistently-oriented input, where an interior edge shared by
+    // two equally-wound triangles would otherwise look like two boundary half-edges.
+    // Each boundary edge is used by a single triangle, so its one directed occurrence
+    // gives a well-defined half-edge direction (and hence a consistent cap winding for
+    // consistently-oriented input).
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> ucount; // sorted pair -> use count
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> udir; // -> directed
+    for (uint32_t t = 0; t < n_input; t++)
+        for (int e = 0; e < 3; e++) {
+            const uint32_t a = constraints->tri_vertices[3 * t + e];
+            const uint32_t b = constraints->tri_vertices[3 * t + (e + 1) % 3];
+            std::pair<uint32_t, uint32_t> key = a < b ? std::make_pair(a, b) : std::make_pair(b, a);
+            ucount[key]++;
+            udir[key] = {a, b};
+        }
+
+    // Boundary half-edges, grouped by start vertex (sorted -> deterministic walk).
+    std::map<uint32_t, std::vector<uint32_t>> adj;
+    std::set<std::pair<uint32_t, uint32_t>> boundary;
+    for (const auto& kv : ucount)
+        if (kv.second == 1) {
+            const std::pair<uint32_t, uint32_t>& e = udir[kv.first];
+            adj[e.first].push_back(e.second);
+            boundary.insert(e);
+        }
+    if (boundary.empty()) {
+        if (verbose) printf("\tNo holes to fill (input surface is closed)\n");
+        return 0;
+    }
+
+    // Chain boundary half-edges into loops and cap each one.
+    std::set<std::pair<uint32_t, uint32_t>> used;
+    std::vector<uint32_t> cap_tris; // flat: 3 vertex indices per cap triangle
+    uint32_t num_loops = 0;
+    for (const auto& start : boundary) {
+        if (used.count(start)) continue;
+        std::vector<uint32_t> loop;
+        uint32_t a = start.first, b = start.second;
+        used.insert({a, b});
+        loop.push_back(a);
+        // Follow next boundary half-edges until we return to the start (or dead-end).
+        for (uint32_t guard = 0; guard <= (uint32_t)boundary.size(); guard++) {
+            loop.push_back(b);
+            if (b == start.first) break;
+            const auto ait = adj.find(b);
+            uint32_t nb = UINT32_MAX;
+            if (ait != adj.end())
+                for (uint32_t cand : ait->second)
+                    if (!used.count({b, cand})) {
+                        nb = cand;
+                        break;
+                    }
+            if (nb == UINT32_MAX) break; // open chain (non-manifold boundary): best effort
+            used.insert({b, nb});
+            b = nb;
+        }
+        // loop currently is [a, ..., a]; drop the duplicated closing vertex.
+        if (loop.size() >= 2 && loop.front() == loop.back()) loop.pop_back();
+        if (loop.size() < 3) continue;
+        // Reverse so the caps carry the reversed boundary half-edges (manifold-consistent).
+        std::reverse(loop.begin(), loop.end());
+        ear_clip_loop(loop, mesh, cap_tris);
+        num_loops++;
+    }
+
+    // Drop degenerate (collinear) caps: they are zero-area and would be rejected as
+    // constraints. The corresponding boundary stays open and is handled downstream by
+    // place_virtual_constraints exactly as before, so this degrades gracefully.
+    std::vector<uint32_t> kept;
+    kept.reserve(cap_tris.size());
+    for (size_t i = 0; i + 3 <= cap_tris.size(); i += 3) {
+        if (basicVec3d::misaligned(mesh->vertices[cap_tris[i]], mesh->vertices[cap_tris[i + 1]], mesh->vertices[cap_tris[i + 2]])) {
+            kept.push_back(cap_tris[i]);
+            kept.push_back(cap_tris[i + 1]);
+            kept.push_back(cap_tris[i + 2]);
+        }
+    }
+    const uint32_t n_cap = (uint32_t)(kept.size() / 3);
+    if (n_cap == 0) {
+        if (verbose) printf("\t%u hole loop(s) found but produced no usable caps\n", num_loops);
+        return 0;
+    }
+
+    // Append the cap constraints after the real input constraints.
+    const uint32_t n_total = n_input + n_cap;
+    constraints->tri_vertices =
+        (uint32_t*)realloc(constraints->tri_vertices, 3 * n_total * sizeof(uint32_t));
+    for (uint32_t i = 0; i < 3 * n_cap; i++) constraints->tri_vertices[3 * n_input + i] = kept[i];
+    if (constraints->tri_original_index) {
+        constraints->tri_original_index =
+            (uint32_t*)realloc(constraints->tri_original_index, n_total * sizeof(uint32_t));
+        for (uint32_t i = 0; i < n_cap; i++)
+            constraints->tri_original_index[n_input + i] = UINT32_MAX; // caps: no input index
+    }
+    constraints->num_triangles = n_total;
+
+    if (verbose) printf("\tFilled %u hole loop(s) with %u cap triangles\n", num_loops, n_cap);
+    return n_cap;
+}
+
+void insert_edges_and_points(
+    constraints_t* constraints,
+    TetMesh* mesh,
+    const extra_features_t& extra,
+    bool verbose)
+{
+    const uint32_t n_edges = extra.n_edges;
+    const uint32_t n_points = extra.n_points;
+    if (n_edges == 0 && n_points == 0) return;
+
+    // Forcing-triangle size. It does NOT affect correctness -- the exact BSP pins the edge
+    // (as the shared crease of two non-coplanar triangles) or the point (as the apex of a
+    // corner) at any non-zero size. It DOES affect cost: a triangle that reaches a
+    // neighbouring feature intersects it and multiplies the BSP cells. Experimentally the
+    // tet count plateaus once the displacement is <= ~0.1x the local feature spacing (below
+    // that no new intersections are removed), so we use that fraction.
+    static const double DISP_FACTOR = 0.1;
+
+    // The surface triangles are [0, I); everything appended so far (hole caps) and
+    // everything appended below (edge/point forcing triangles) is non-surface. I can be 0
+    // (no surface input), so the "unset" sentinel is UINT32_MAX, not 0.
+    const uint32_t I = (constraints->num_input_triangles == UINT32_MAX)
+                           ? constraints->num_triangles
+                           : constraints->num_input_triangles;
+    constraints->num_input_triangles = I;
+
+    // Point displacement: a fraction of the estimated point spacing (density-aware, so it
+    // scales with how close the points are). Degenerate cases (a single point, or all
+    // coincident) fall back to the average surface/edge length, else 1. Only used when
+    // n_points > 0. All sums are in a fixed order so the result is platform-identical.
+    double point_disp = 0.0;
+    if (n_points > 0) {
+        double lo[3] = {extra.point_verts[0], extra.point_verts[1], extra.point_verts[2]};
+        double hi[3] = {lo[0], lo[1], lo[2]};
+        for (uint32_t p = 0; p < n_points; p++)
+            for (int k = 0; k < 3; k++) {
+                const double c = extra.point_verts[3 * p + k];
+                if (c < lo[k]) lo[k] = c;
+                if (c > hi[k]) hi[k] = c;
+            }
+        const double diag = std::sqrt(
+            (hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+            (hi[2] - lo[2]) * (hi[2] - lo[2]));
+        if (n_points > 1 && diag > 0.0) {
+            point_disp = DISP_FACTOR * diag / std::cbrt((double)n_points);
+        } else {
+            // single point / all coincident: use the surface (or edge) average length.
+            double lspec = 0.0;
+            uint64_t ec = 0;
+            for (uint32_t t = 0; t < I; t++)
+                for (int e = 0; e < 3; e++) {
+                    const pointType& p = mesh->vertices[constraints->tri_vertices[3 * t + e]];
+                    const pointType& q =
+                        mesh->vertices[constraints->tri_vertices[3 * t + (e + 1) % 3]];
+                    const double dx = q.X() - p.X(), dy = q.Y() - p.Y(), dz = q.Z() - p.Z();
+                    lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
+                    ec++;
+                }
+            for (uint32_t e = 0; ec == 0 && e < n_edges; e++) {
+                const double* A = &extra.edge_verts[3 * extra.edge_idx[2 * e]];
+                const double* B = &extra.edge_verts[3 * extra.edge_idx[2 * e + 1]];
+                const double dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
+                lspec += std::sqrt(dx * dx + dy * dy + dz * dz);
+                ec++;
+            }
+            point_disp = (ec && lspec > 0.0) ? DISP_FACTOR * lspec / (double)ec : 1.0;
+        }
+        if (!(point_disp > 0.0)) point_disp = 1.0;
+    }
+
+    // Grow the constraint arrays. Per edge: 2 triangles; per point: 3 triangles. Vertices are
+    // appended below through TetMesh::pushVertex, which -- unlike a bare vertices.push_back --
+    // also grows the parallel inc_tet / marked_vertex arrays and updates the static predicate
+    // filters, all of which tetrahedrize() relies on being sized to numVertices().
+    const uint32_t nv_add = extra.n_edge_verts + 2 * n_edges + n_points + 3 * n_points;
+    const uint32_t nt_add = 2 * n_edges + 3 * n_points;
+    const uint32_t base_v = mesh->numVertices();
+    const uint32_t base_t = constraints->num_triangles;
+    constraints->tri_vertices =
+        (uint32_t*)realloc(constraints->tri_vertices, 3 * (base_t + nt_add) * sizeof(uint32_t));
+    if (constraints->tri_original_index)
+        constraints->tri_original_index = (uint32_t*)realloc(
+            constraints->tri_original_index,
+            (base_t + nt_add) * sizeof(uint32_t));
+
+    // Deduplicate appended vertices against the existing mesh vertices and against each
+    // other: an exact-duplicate explicit point makes the Delaunay's symbolic perturbation
+    // fail (real meshes routinely produce coincident forcing-triangle apexes). Reusing a
+    // coincident vertex is safe -- the two/three forcing triangles still pin their edge /
+    // point. -0.0 is normalized to 0.0 so it matches +0.0. First occurrence wins, so the
+    // mapping is deterministic.
+    auto norm = [](double d) -> double { return d == 0.0 ? 0.0 : d; };
+    std::unordered_map<std::array<double, 3>, uint32_t, CoordHash> vmap;
+    vmap.reserve(base_v + nv_add);
+    for (uint32_t v = 0; v < base_v; v++)
+        vmap.emplace(
+            std::array<double, 3>{
+                norm(mesh->vertices[v].X()),
+                norm(mesh->vertices[v].Y()),
+                norm(mesh->vertices[v].Z())},
+            v);
+
+    uint32_t ti = base_t;
+    auto add_vertex = [&](double x, double y, double z) -> uint32_t {
+        const std::array<double, 3> key = {norm(x), norm(y), norm(z)};
+        auto it = vmap.find(key);
+        if (it != vmap.end()) return it->second;
+        const uint32_t idx = mesh->numVertices();
+        mesh->pushVertex(pointType(x, y, z));
+        vmap.emplace(key, idx);
+        return idx;
+    };
+    auto add_tri = [&](uint32_t a, uint32_t b, uint32_t c) {
+        constraints->tri_vertices[3 * ti] = a;
+        constraints->tri_vertices[3 * ti + 1] = b;
+        constraints->tri_vertices[3 * ti + 2] = c;
+        if (constraints->tri_original_index) constraints->tri_original_index[ti] = UINT32_MAX;
+        ti++;
+    };
+
+    // Edge-forcing triangles. The apex is A + |AB|*e_k; the axis with the largest
+    // |AB| component is dropped (it gives the near-collinear, smallest-area triangle),
+    // keeping the two largest-area triangles. All decisions use only exact double
+    // subtraction / abs / compare, so the choice is platform-independent.
+    // Add the edge endpoints (deduplicated) and remember each one's actual mesh index --
+    // add_vertex may return an existing index, so they are NOT at contiguous positions.
+    std::vector<uint32_t> ev_idx(extra.n_edge_verts);
+    for (uint32_t i = 0; i < extra.n_edge_verts; i++)
+        ev_idx[i] = add_vertex(
+            extra.edge_verts[3 * i],
+            extra.edge_verts[3 * i + 1],
+            extra.edge_verts[3 * i + 2]);
+    for (uint32_t e = 0; e < n_edges; e++) {
+        const uint32_t ia = ev_idx[extra.edge_idx[2 * e]];
+        const uint32_t ib = ev_idx[extra.edge_idx[2 * e + 1]];
+        const pointType A = mesh->vertices[ia];
+        const pointType B = mesh->vertices[ib];
+        const double dx = B.X() - A.X(), dy = B.Y() - A.Y(), dz = B.Z() - A.Z();
+        const double L = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double adx = std::fabs(dx), ady = std::fabs(dy), adz = std::fabs(dz);
+        int drop = 0;
+        double amax = adx;
+        if (ady > amax) {
+            drop = 1;
+            amax = ady;
+        }
+        if (adz > amax) drop = 2;
+        const double Le = L * DISP_FACTOR;
+        for (int k = 0; k < 3; k++) {
+            if (k == drop) continue;
+            double ax = A.X(), ay = A.Y(), az = A.Z();
+            if (k == 0)
+                ax += Le;
+            else if (k == 1)
+                ay += Le;
+            else
+                az += Le;
+            const uint32_t iap = add_vertex(ax, ay, az);
+            add_tri(ia, ib, iap);
+        }
+    }
+
+    // Point-forcing triangles: the three faces of the axis-aligned corner at P. Their
+    // planes are x=Px, y=Py, z=Pz, so they meet exactly at P, pinning it as a vertex.
+    for (uint32_t p = 0; p < n_points; p++) {
+        const double px = extra.point_verts[3 * p], py = extra.point_verts[3 * p + 1],
+                     pz = extra.point_verts[3 * p + 2];
+        const uint32_t ip = add_vertex(px, py, pz);
+        const uint32_t iax = add_vertex(px + point_disp, py, pz);
+        const uint32_t iay = add_vertex(px, py + point_disp, pz);
+        const uint32_t iaz = add_vertex(px, py, pz + point_disp);
+        add_tri(ip, iax, iay);
+        add_tri(ip, iay, iaz);
+        add_tri(ip, iaz, iax);
+    }
+
+    constraints->num_triangles = ti;
+    constraints->num_edge_triangles = 2 * n_edges;
+    constraints->num_point_triangles = 3 * n_points;
+
+    if (verbose)
+        printf(
+            "\tInserted %u edge (%u tris) and %u point (%u tris) features\n",
+            n_edges,
+            2 * n_edges,
+            n_points,
+            3 * n_points);
+}
+
+
 } // namespace vol_rem
