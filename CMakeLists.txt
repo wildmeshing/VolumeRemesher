@@ -157,12 +157,9 @@ else()
 		SOURCE_SUBDIR do-not-configure
 	)
 
-	# TEMPORARY: pinned to the fork carrying the retetrahedrizeCavity fix
-	# (MarcoAttene/Delaunay3D#1). Repoint to MarcoAttene/Delaunay3D at a tagged commit
-	# once that PR is merged.
 	FetchContent_Declare(Delaunay3D
-		GIT_REPOSITORY https://github.com/danielepanozzo/Delaunay3D.git
-		GIT_TAG 3880df77d413be529fa827379eb8fa529e38791b
+		GIT_REPOSITORY https://github.com/MarcoAttene/Delaunay3D.git
+		GIT_TAG ebd41bb1b407246b98b72b477b4653fe451aec60
 		SOURCE_SUBDIR do-not-configure
 	)
 
