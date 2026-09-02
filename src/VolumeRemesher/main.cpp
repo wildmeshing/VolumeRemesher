@@ -261,12 +261,6 @@ void read_MEDIT_file(
 /// <param name="argv"></param>
 /// <returns></returns>
 
-#ifdef _MSC_VER
-#ifndef NDEBUG
-#define DEBUG
-#endif
-#endif
-
 int main(int argc, char** argv)
 {
     bool triangulate = false;
@@ -284,12 +278,6 @@ int main(int argc, char** argv)
     char* fileB_name = NULL;
     char bool_opcode = '0';
 
-#ifdef DEBUG
-    fileA_name = (char *)"..\\models\\Octocat.off";
-    fileB_name = (char *)"..\\models\\Octocat.bg.tet";
-    bool_opcode = 'U';
-    verbose = true;
-#else
     if (argc < 2) {
         printf("\nUsage: mesh_generator [-v | -l | -s | -b | -t] [inputfile_A.off] [bool_opcode "
                "inputfile_B.off] [-e edges.off] [-p points.off]\n\n"
@@ -321,7 +309,6 @@ int main(int argc, char** argv)
                "mesh_generator ant.off U pig.off\n");
         return 0;
     }
-    #endif
 
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {

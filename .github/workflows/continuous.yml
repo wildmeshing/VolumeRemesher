@@ -113,21 +113,6 @@ jobs:
             -S .
           cmake --build build -j1
 
-      - name: Diagnose (run mesh_generator with stderr visible)
-        shell: cmd
-        continue-on-error: true
-        run: |
-          cd build
-          echo ===== 2d england =====
-          mesh_generator.exe ..\models\2d\england.obj -2d -v
-          echo exit=%errorlevel%
-          echo ===== 3d cube_subdiv default =====
-          mesh_generator.exe ..\models\cube_subdiv.off -v
-          echo exit=%errorlevel%
-          echo ===== 3d cube_subdiv -t =====
-          mesh_generator.exe ..\models\cube_subdiv.off -t -v
-          echo exit=%errorlevel%
-
       - name: Integration tests
         run: |
           cd build
