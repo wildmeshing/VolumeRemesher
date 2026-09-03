@@ -279,12 +279,6 @@ int main(int argc, char** argv)
     char bool_opcode = '0';
 
     if (argc < 2) {
-#if defined _MSC_VER && !defined NDEBUG
-        fileA_name = (char*)"..\\models\\Octocat.off";
-        fileB_name = (char*)"..\\models\\Octocat.bg.tet";
-        bool_opcode = 'U';
-        verbose = true;
-#else
         printf("\nUsage: mesh_generator [-v | -l | -s | -b | -t] [inputfile_A.off] [bool_opcode "
                "inputfile_B.off] [-e edges.off] [-p points.off]\n\n"
                "Defines the volume enclosed by the input OFF file(s) and saves a volume mesh to "
@@ -314,7 +308,6 @@ int main(int argc, char** argv)
                "Example:\n"
                "mesh_generator ant.off U pig.off\n");
         return 0;
-#endif
     }
 
     for (int i = 1; i < argc; i++) {
