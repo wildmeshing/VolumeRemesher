@@ -9,7 +9,7 @@
 // Reads the sidecars <triangulation.off>.rational / .segmentprov / .pointprov, which the
 // generator writes with -2d -r. Exits 0 and prints "TRACKING OK" on success.
 
-#include <VolumeRemesher/numerics.h>
+#include <numerics.h>
 
 #include "tri_orientation.h"
 
@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-using vol_rem::bigrational;
+using NFG::bigrational;
 
 namespace {
 

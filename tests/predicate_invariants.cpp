@@ -22,13 +22,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <VolumeRemesher/implicit_point.h>
+#include <implicit_point.h>
 
 #include <cstdint>
 #include <memory>
 #include <vector>
 
-using namespace vol_rem;
+using namespace IPs;
+using namespace NFG;
 
 namespace {
 

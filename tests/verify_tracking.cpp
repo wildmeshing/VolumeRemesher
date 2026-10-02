@@ -16,7 +16,7 @@
 // Usage: verify_tracking <input.off> <volume.tet>
 //   expects <volume.tet>.rational, <volume.tet>.triangleprov, <volume.tet>.groups alongside.
 
-#include <VolumeRemesher/numerics.h>
+#include <numerics.h>
 
 #include "tet_orientation.h"
 
@@ -31,7 +31,7 @@
 #include <unordered_map>
 #include <vector>
 
-using vol_rem::bigrational;
+using NFG::bigrational;
 
 typedef std::array<bigrational, 3> R3;
 typedef std::array<bigrational, 2> R2;
