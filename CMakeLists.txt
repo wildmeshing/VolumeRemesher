@@ -147,7 +147,7 @@ else()
 	# (moving branch heads would let different CI runners fetch different sources).
 	FetchContent_Declare(nfg
 		GIT_REPOSITORY https://github.com/MarcoAttene/nfg.git
-		GIT_TAG 9bb3369fd338a7bc6a5e3a98a029b2a1c8f6ed89
+		GIT_TAG 1b0efe823e9d13ddc70f79d5a378ad42e9fba85f
 		SOURCE_SUBDIR do-not-configure
 	)
 

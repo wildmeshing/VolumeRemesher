@@ -10,7 +10,7 @@
 #include <VolumeRemesher/2d/arrangement2d.h>
 #include <VolumeRemesher/2d/delaunay2d.h>
 #include <VolumeRemesher/2d/predicates2d.h>
-#include <VolumeRemesher/numerics.h>
+#include <numerics.h>
 
 #include <algorithm>
 #include <array>
@@ -22,10 +22,10 @@
 #include <string>
 #include <vector>
 
-using vol_rem::bigrational;
-using vol_rem::explicitPoint2D;
-using vol_rem::genericPoint;
-using vol_rem::implicitPoint2D_SSI;
+using NFG::bigrational;
+using IPs::explicitPoint2D;
+using IPs::genericPoint;
+using IPs::implicitPoint2D_SSI;
 using namespace vol_rem::vr2d;
 // vr2d::Sign (NEGATIVE/ZERO/POSITIVE) is geogram-PCK-compatible, but Indirect_Predicates now
 // also ships a global unscoped `enum IP_Sign` with the same enumerators, so the bare names are
@@ -140,8 +140,8 @@ TEST_CASE("2d predicates: incircle equals the lifted 4x4 determinant", "[2d][pre
         const double outside[2] = {5.0, 5.0};
 
         REQUIRE(PCK::orient_2d(a, b, c) == vol_rem::vr2d::POSITIVE);
-        CHECK(vol_rem::incircle(a[0], a[1], b[0], b[1], c[0], c[1], inside[0], inside[1]) > 0);
-        CHECK(vol_rem::incircle(a[0], a[1], b[0], b[1], c[0], c[1], outside[0], outside[1]) < 0);
+        CHECK(IPs::incircle(a[0], a[1], b[0], b[1], c[0], c[1], inside[0], inside[1]) > 0);
+        CHECK(IPs::incircle(a[0], a[1], b[0], b[1], c[0], c[1], outside[0], outside[1]) < 0);
         CHECK(sgn_rat(det4_lifted(a, b, c, inside)) > 0);
         CHECK(sgn_rat(det4_lifted(a, b, c, outside)) < 0);
     }
@@ -155,8 +155,9 @@ TEST_CASE("2d predicates: incircle equals the lifted 4x4 determinant", "[2d][pre
             p[k][1] = rnd.coord(6);
         }
         const int got =
-            vol_rem::incircle(p[0][0], p[0][1], p[1][0], p[1][1], p[2][0], p[2][1], p[3][0], p[3][1]);
+            IPs::incircle(p[0][0], p[0][1], p[1][0], p[1][1], p[2][0], p[2][1], p[3][0], p[3][1]);
         const int want = sgn_rat(det4_lifted(p[0], p[1], p[2], p[3]));
+
         REQUIRE(got == want);
     }
 }
@@ -176,7 +177,7 @@ TEST_CASE("2d predicates: in_circle_2d_SOS agrees with incircle when non-degener
         if (PCK::orient_2d(p[0], p[1], p[2]) == vol_rem::vr2d::ZERO) continue;
 
         const int plain =
-            vol_rem::incircle(p[0][0], p[0][1], p[1][0], p[1][1], p[2][0], p[2][1], p[3][0], p[3][1]);
+            IPs::incircle(p[0][0], p[0][1], p[1][0], p[1][1], p[2][0], p[2][1], p[3][0], p[3][1]);
         const Sign sos = PCK::in_circle_2d_SOS(p[0], p[1], p[2], p[3]);
 
         REQUIRE(sos != vol_rem::vr2d::ZERO); // SOS must never be undecided
@@ -371,7 +372,7 @@ DelaunayReport validate_delaunay(const Delaunay2d& D, index_t nb_pts)
                 }
             }
             if (opp == Delaunay2d::NO_INDEX) continue;
-            if (vol_rem::incircle(a[0], a[1], b[0], b[1], c[0], c[1],
+            if (IPs::incircle(a[0], a[1], b[0], b[1], c[0], c[1],
                                   D.vertex_ptr(opp)[0], D.vertex_ptr(opp)[1]) > 0) {
                 r.empty_circle_ok = false;
                 r.detail = "not locally Delaunay at triangle " + std::to_string(t);
