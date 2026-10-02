@@ -6,7 +6,7 @@
 #ifndef VOLUMEREMESHER_2D_EMBED2D_H
 #define VOLUMEREMESHER_2D_EMBED2D_H
 
-#include <VolumeRemesher/numerics.h>
+#include <numerics.h>
 
 #include <array>
 #include <cstdint>
@@ -39,7 +39,7 @@ namespace vol_rem {
 // extra output vertices. Returns false only if the input is empty or unusable.
 bool embed_seg_in_tri_mesh(const std::vector<double>& seg_vrt_coords,
                            const std::vector<uint32_t>& segment_indexes,
-                           std::vector<bigrational>& vertices,
+                           std::vector<NFG::bigrational>& vertices,
                            std::vector<std::array<uint32_t, 3>>& out_tris,
                            std::vector<std::vector<std::array<uint32_t, 3>>>& out_segment_provenance,
                            std::vector<std::array<uint32_t, 2>>& out_point_provenance,

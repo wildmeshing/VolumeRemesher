@@ -16,8 +16,7 @@
 #ifndef VOLUMEREMESHER_2D_PREDICATES2D_H
 #define VOLUMEREMESHER_2D_PREDICATES2D_H
 
-#include <VolumeRemesher/implicit_point.h>
-#include <VolumeRemesher/indirect_predicates.h>
+#include <implicit_point.h>
 
 namespace vol_rem {
 namespace vr2d {

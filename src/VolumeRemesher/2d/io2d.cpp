@@ -8,6 +8,8 @@
 #include <fstream>
 #include <unordered_map>
 
+using namespace NFG;
+
 namespace vol_rem {
 namespace vr2d {
 

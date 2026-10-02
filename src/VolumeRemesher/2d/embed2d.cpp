@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <unordered_map>
 
+using namespace NFG;
+
 namespace vol_rem {
 
 bool embed_seg_in_tri_mesh(const std::vector<double>& seg_vrt_coords,

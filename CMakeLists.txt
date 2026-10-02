@@ -147,19 +147,19 @@ else()
 	# (moving branch heads would let different CI runners fetch different sources).
 	FetchContent_Declare(nfg
 		GIT_REPOSITORY https://github.com/MarcoAttene/nfg.git
-		GIT_TAG a8f7b6f091c97e5b7c7db1761f8f15ea1a8a8894
+		GIT_TAG 9bb3369fd338a7bc6a5e3a98a029b2a1c8f6ed89
 		SOURCE_SUBDIR do-not-configure
 	)
 
 	FetchContent_Declare(indirect_predicates
 		GIT_REPOSITORY https://github.com/MarcoAttene/Indirect_Predicates.git
-		GIT_TAG 74960591e0381f85d94bcee603829451f016b4a2
+		GIT_TAG a5cb2c4e6a2e8ae137f23ffcee91d113e8f3a1c0
 		SOURCE_SUBDIR do-not-configure
 	)
 
 	FetchContent_Declare(Delaunay3D
 		GIT_REPOSITORY https://github.com/MarcoAttene/Delaunay3D.git
-		GIT_TAG ebd41bb1b407246b98b72b477b4653fe451aec60
+		GIT_TAG 8361b9a98b93a4991191866bb310a2dc39cb08fd
 		SOURCE_SUBDIR do-not-configure
 	)
 

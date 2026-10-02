@@ -65,7 +65,7 @@ namespace PCK {
 
 Sign in_circle_2d_SOS(const double* p0, const double* p1, const double* p2, const double* p3)
 {
-    const int s = incircle(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+    const int s = IPs::incircle(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
     if (s != 0) return to_sign(s);
 
     // The four points are exactly cocircular. Disambiguate symbolically.

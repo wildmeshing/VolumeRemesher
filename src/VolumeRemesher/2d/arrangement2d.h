@@ -50,7 +50,8 @@
 #ifndef VOLUMEREMESHER_2D_ARRANGEMENT2D_H
 #define VOLUMEREMESHER_2D_ARRANGEMENT2D_H
 
-#include <VolumeRemesher/implicit_point.h>
+#include <implicit_point.h>
+using namespace IPs;
 
 #include <array>
 #include <cstdint>
