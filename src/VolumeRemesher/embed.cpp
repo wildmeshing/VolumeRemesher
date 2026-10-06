@@ -1,6 +1,7 @@
 #include "embed.h"
 #include <vector>
 #include "BSP.h"
+#include "exact_coords.h"
 
 namespace vol_rem {
 void embed_tri_in_poly_mesh(
@@ -60,17 +61,17 @@ void embed_tri_in_poly_mesh(
     complex->makeTetrahedra(verbose, /*keep_all_cells=*/true);
 
     if (verbose) printf("Producing vertices...\n");
-    // Get exact vertex coordinates
-    out_vrt_coords.resize(complex->vertices.size() * 3);
-    for (uint64_t v_id = 0; v_id < complex->vertices.size(); v_id++) {
-        if (!complex->vertices[v_id]->getExactXYZCoordinates(
-                out_vrt_coords[v_id * 3],
-                out_vrt_coords[v_id * 3 + 1],
-                out_vrt_coords[v_id * 3 + 2]))
-            ip_error(
-                "embed_tri_in_poly_mesh: could not compute exact coordinates. Should not "
-                "happen!\n");
-    }
+    // Get exact vertex coordinates, in lowest terms
+    const bool coords_ok = exact_coords_reduced<3>(
+        complex->vertices.size(),
+        [&](uint64_t v_id, bigrational* c) {
+            return complex->vertices[v_id]->getExactXYZCoordinates(c[0], c[1], c[2]);
+        },
+        out_vrt_coords);
+    if (!coords_ok)
+        ip_error(
+            "embed_tri_in_poly_mesh: could not compute exact coordinates. Should not "
+            "happen!\n");
 
     if (verbose) printf("Producing facets...\n");
     // Get facets

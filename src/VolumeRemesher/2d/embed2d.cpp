@@ -1,5 +1,6 @@
 #include "embed2d.h"
 
+#include "../exact_coords.h"
 #include "arrangement2d.h"
 
 #include <algorithm>
@@ -45,14 +46,14 @@ bool embed_seg_in_tri_mesh(const std::vector<double>& seg_vrt_coords,
         out_tris.push_back(tv);
     }
 
-    vertices.clear();
-    vertices.reserve(2 * used.size());
-    for (const uint32_t v : used) {
-        bigrational x, y;
-        if (!A.V[v]->getExactXYCoordinates(x, y)) return false;
-        vertices.push_back(x);
-        vertices.push_back(y);
-    }
+    // Exact coordinates, in lowest terms
+    if (!exact_coords_reduced<2>(
+            used.size(),
+            [&](uint64_t i, bigrational* c) {
+                return A.V[used[i]]->getExactXYCoordinates(c[0], c[1]);
+            },
+            vertices))
+        return false;
 
     // Index every emitted edge once; doing this per sub-edge instead would be quadratic.
     std::unordered_map<uint64_t, uint32_t> edge_tri;

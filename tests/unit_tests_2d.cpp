@@ -9,6 +9,7 @@
 
 #include <VolumeRemesher/2d/arrangement2d.h>
 #include <VolumeRemesher/2d/delaunay2d.h>
+#include <VolumeRemesher/2d/embed2d.h>
 #include <VolumeRemesher/2d/predicates2d.h>
 #include <numerics.h>
 
@@ -1058,4 +1059,38 @@ TEST_CASE("2d arrangement: collinear and degenerate domains", "[2d][arrangement]
         const vrtest::TriOrientationResult o = vrtest::check_tri_orientation(finite_triangles(A));
         CHECK(o.ok);
     }
+}
+
+TEST_CASE("2d embed: exact coordinates come back in lowest terms", "[2d][embed]")
+{
+    // Random crossing segments: most output vertices are segment-segment intersections, whose
+    // coordinates are quotients that need a real GCD, and there are enough of them for the
+    // coordinate pass to run in parallel (parallel_blocks stays serial below 512).
+    Rnd r(7);
+    std::vector<double> c;
+    std::vector<uint32_t> idx;
+    for (uint32_t i = 0; i < 80; i++) {
+        for (int k = 0; k < 4; k++) c.push_back(r.unit());
+        idx.push_back(2 * i);
+        idx.push_back(2 * i + 1);
+    }
+    std::vector<bigrational> vertices;
+    std::vector<std::array<uint32_t, 3>> tris;
+    std::vector<std::vector<std::array<uint32_t, 3>>> seg_prov;
+    std::vector<std::array<uint32_t, 2>> pt_prov;
+    REQUIRE(vol_rem::embed_seg_in_tri_mesh(c, idx, vertices, tris, seg_prov, pt_prov, false));
+    REQUIRE(vertices.size() >= 2 * 512);
+
+    uint64_t not_reduced = 0;
+    for (const bigrational& v : vertices) {
+#ifdef USE_GNU_GMP_CLASSES
+        mpz_class g;
+        mpz_gcd(g.get_mpz_t(), v.get_num_mpz_t(), v.get_den_mpz_t());
+        if (g != 1) not_reduced++;
+#else
+        if (v.sgn() == 0 ? !v.get_num().empty() : !v.get_num().GCD(v.get_den()).isOne())
+            not_reduced++;
+#endif
+    }
+    CHECK(not_reduced == 0);
 }
