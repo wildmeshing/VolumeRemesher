@@ -77,8 +77,8 @@ catch_discover_tests(unit_tests_2d)
 
 # Regression for embed_tri_in_poly_mesh emitting inverted tets on a near-planar input.
 # Replays a captured call (tests/data/embed_thingi100727.bin) so no mesh generation or
-# external tool is involved. NOT run by default: the embedding takes ~80 minutes, so the
-# test case carries Catch2's [.] hidden tag and must be asked for by name.
+# external tool is involved. NOT run by default: the embedding takes minutes (~4 on an
+# M3 Max), so the test case carries Catch2's [.] hidden tag and must be asked for by name.
 add_executable(embed_regression embed_regression.cpp tet_orientation.h)
 target_link_libraries(embed_regression PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
 target_compile_features(embed_regression PRIVATE cxx_std_20)
