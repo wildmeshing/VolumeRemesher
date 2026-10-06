@@ -4,17 +4,18 @@
 // embed_tri_in_poly_mesh by wildmeshing-toolkit's tetwild for Thingi10K model 100727,
 // dumped verbatim so the call can be reproduced without tetwild in the loop.
 //
-// What goes wrong: six of the returned tets have NEGATIVE signed volume in exact
-// rational arithmetic. Two of them share a face, and because both are stored with the
-// wrong winding they present that face with the SAME orientation as their neighbour
-// rather than the opposite one -- so downstream the mesh looks like two tets overlapping
-// on a shared face, which is what tetwild's own consistency check reports:
+// What went wrong (with the tetrahedralization of the time, before the Delaunay3D
+// backend): six of the returned tets had NEGATIVE signed volume in exact rational
+// arithmetic. Two of them shared a face, and because both were stored with the wrong
+// winding they presented that face with the SAME orientation as their neighbour rather
+// than the opposite one -- so downstream the mesh looked like two tets overlapping on a
+// shared face, which is what tetwild's own consistency check reported:
 //
 //     Face [3863, 3880, 1267799] appears more than once in the tet list
 //
-// The vertices involved are not coincident (nothing within 1e-3) and the tets are
+// The vertices involved were not coincident (nothing within 1e-3) and the tets were
 // genuinely distinct and correctly placed on opposite sides of the face. Only the stored
-// winding is wrong.
+// winding was wrong.
 //
 // Cause (MarcoAttene/Indirect_Predicates#15): nothing is decided in floating point -- the
 // exact tier is simply never reached, because the filter wrongly reports that it does not
@@ -32,30 +33,38 @@
 // NOT RUN BY DEFAULT: tagged [.] and run with
 //     ./embed_regression "[embed_regression]"
 //
-// About 4 minutes on an M3 Max (measured 2026-10-06). It was ~37 minutes while NFG's GCD
-// was Euclid's and embed_tri_in_poly_mesh computed its 1.6M exact output coordinates
-// serially, and over an hour before that. Verifying the exact rational volume of all 10.5M
-// output tets is what it used to spend that hour on, so it now checks the six tets named
-// above, which is instant, plus the combinatorial consistency of the whole complex. The
-// general "every tet has positive volume" property is asserted by makeTetrahedra itself in
-// debug builds.
+// What it checks: the exact orientation of EVERY output tet (about 12M), plus the
+// combinatorial consistency of the whole complex. For a while it checked only the six tets
+// above, looked up by vertex index, because the all-tets check took over an hour; the
+// Delaunay3D backend then renumbered the output, and the lookup found none of them. Checking
+// every tet does not depend on numbering, and it still catches this bug: with the
+// Indirect_Predicates#15 fix reverted, the current backend emits one inverted tet here
+// (6*vol ~ -1.1e-4, measured 2026-10-06), and this test fails on it -- and on the four
+// faces it then presents with the same winding as its neighbours.
 //
-// Nearly all of what is left is embed_tri_in_poly_mesh itself: the arrangement and the
-// tetrahedralization. Its exact-coordinate pass now runs on parallel_blocks (see
-// exact_coords.h).
+// About 4 minutes on an M3 Max with 16 threads (measured 2026-10-06), nearly all of it
+// inside embed_tri_in_poly_mesh (the arrangement and the tetrahedralization); the
+// orientation check is about 4 CPU-minutes of that, spread over all threads. It was ~37
+// minutes while NFG's GCD was Euclid's and the exact output coordinates were computed
+// serially.
 
 #include <catch2/catch_test_macros.hpp>
 
 #include "VolumeRemesher/embed.h"
+#include "VolumeRemesher/parallel.h"
 #include "tet_orientation.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
-#include <map>
+#include <mutex>
+#include <sstream>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -111,7 +120,9 @@ vol_rem::bigrational signed_volume_x6(
     const std::vector<vol_rem::bigrational>& c,
     const std::array<uint32_t, 4>& t)
 {
-    const auto co = [&c](uint32_t v, int k) { return c[3 * static_cast<size_t>(v) + k]; };
+    const auto co = [&c](uint32_t v, int k) -> const vol_rem::bigrational& {
+        return c[3 * static_cast<size_t>(v) + k];
+    };
     vol_rem::bigrational e1[3], e2[3], e3[3];
     for (int k = 0; k < 3; ++k) {
         e1[k] = co(t[1], k) - co(t[0], k);
@@ -122,6 +133,56 @@ vol_rem::bigrational signed_volume_x6(
     return (e1[1] * e2[2] - e1[2] * e2[1]) * e3[0] + (e1[2] * e2[0] - e1[0] * e2[2]) * e3[1] +
            (e1[0] * e2[1] - e1[1] * e2[0]) * e3[2];
 }
+
+#ifndef USE_GNU_GMP_CLASSES
+// The same sign, without a single GCD. signed_volume_x6 subtracts rationals, and NFG's
+// bigrational sum runs a GCD on every call -- about 300 us per tet here, an hour of CPU over
+// all of them. Instead each vertex is scaled to integer homogeneous coordinates
+// (X, Y, Z, W) = W * (x, y, z, 1) with W = Dx * Dy * Dz > 0, and the orientation is the sign
+// of the 4x4 determinant of those rows: det4 = -(Wa * Wb * Wc * Wd) * vol6, so
+// sgn(vol6) = -sgn(det4). The integers are bigrationals with denominator 1, built with the
+// (non-reducing) (num, den, sign) constructor, so every sum is a GCD of 1 and 1.
+using Homogeneous = std::array<vol_rem::bigrational, 4>;
+
+Homogeneous homogeneous(const std::vector<vol_rem::bigrational>& c, uint32_t v)
+{
+    const vol_rem::bigrational* x = &c[3 * static_cast<size_t>(v)];
+    const vol_rem::bignatural one(uint32_t(1));
+    // A zero coordinate has an empty denominator; it scales nothing.
+    const auto den = [&](int k) -> const vol_rem::bignatural& {
+        return sgn(x[k]) == 0 ? one : x[k].get_den();
+    };
+    const vol_rem::bignatural w = den(0) * den(1) * den(2);
+    Homogeneous h;
+    for (int k = 0; k < 3; k++) {
+        if (sgn(x[k]) == 0) continue; // h[k] stays zero
+        h[k] = vol_rem::bigrational(
+            x[k].get_num() * den((k + 1) % 3) * den((k + 2) % 3),
+            one,
+            sgn(x[k]));
+    }
+    h[3] = vol_rem::bigrational(w, one, 1);
+    return h;
+}
+
+// sgn(vol6) of the tet with these four homogeneous vertices: the determinant by its 2x2
+// minors (rows 0-1 against rows 2-3).
+int orientation_sign(
+    const Homogeneous& p0,
+    const Homogeneous& p1,
+    const Homogeneous& p2,
+    const Homogeneous& p3)
+{
+    const auto m = [](const Homogeneous& a, const Homogeneous& b, int i, int j) {
+        return a[i] * b[j] - a[j] * b[i];
+    };
+    const vol_rem::bigrational det4 =
+        m(p0, p1, 0, 1) * m(p2, p3, 2, 3) - m(p0, p1, 0, 2) * m(p2, p3, 1, 3) +
+        m(p0, p1, 0, 3) * m(p2, p3, 1, 2) + m(p0, p1, 1, 2) * m(p2, p3, 0, 3) -
+        m(p0, p1, 1, 3) * m(p2, p3, 0, 2) + m(p0, p1, 2, 3) * m(p2, p3, 0, 1);
+    return -sgn(det4);
+}
+#endif
 
 } // namespace
 
@@ -180,60 +241,63 @@ TEST_CASE("embed_tri_in_poly_mesh emits positively oriented tets", "[embed_regre
         REQUIRE((g == UINT32_MAX || g < tri_provenance.size()));
     }
 
-    // 1. Geometric: the six tets this regression is about must have strictly positive
-    // exact signed volume.
+    // 1. Geometric: every returned tet has strictly positive exact signed volume.
     //
-    // Only these six, not all of them. The exact rational volume of every output tet is
-    // the stronger check but takes over an hour here -- bigrational canonicalizes through
-    // bignatural::GCD on every operation, and there are 10.5M tets. The general property
-    // is asserted in debug builds by makeTetrahedra itself; this test exists to pin the
-    // specific failure, so it looks the failure up directly.
+    // All of them, not a hand-picked list (the header says why). The volumes are computed
+    // on parallel_blocks: each task reads the returned coordinates and makes its own
+    // rationals, and only tet indices leave it (NFG numbers cannot cross threads -- see
+    // parallel.h).
     //
-    // Vertex indices are stable across the fix (the arrangement is unchanged; only four
-    // barycenter apexes switch from an implicit TBC to an explicit centroid, which changes
-    // no index), so the tets are found by vertex SET -- the winding is exactly what
-    // changed, so the stored order must not be part of the lookup.
-    const std::vector<std::array<uint32_t, 4>> known_bad = {
-        {93271, 3863, 1273729, 3880},
-        {93271, 3880, 1273729, 93287},
-        {93355, 93320, 1273739, 3910},
-        {93355, 3910, 1273739, 93354},
-        {96304, 3841, 1274299, 96305},
-        {50705, 1421, 1297152, 204521},
-    };
-    const auto sorted = [](std::array<uint32_t, 4> t) {
-        std::sort(t.begin(), t.end());
-        return t;
-    };
-    std::map<std::array<uint32_t, 4>, size_t> wanted;
-    for (const auto& t : known_bad) wanted[sorted(t)] = SIZE_MAX;
-    for (size_t i = 0; i < out_tets.size(); ++i) {
-        auto it = wanted.find(sorted(out_tets[i]));
-        if (it != wanted.end()) it->second = i;
-    }
+    // Each sign comes from orientation_sign (no GCDs, see above). On every 997th tet it is
+    // also computed the direct way, with signed_volume_x6, and the two must agree -- so a
+    // slip in the determinant cannot make this check pass vacuously.
+    std::vector<std::pair<size_t, int>> bad; // (tet, sign of its volume), sorted below
+    std::atomic<uint64_t> cross_checked{0}, disagreements{0};
+    std::mutex bad_mutex;
+    vol_rem::parallel_blocks(out_tets.size(), [&](uint64_t lo, uint64_t hi) {
+#ifndef USE_GNU_GMP_CLASSES
+        // Consecutive tets are one cell's fan and share vertices.
+        std::unordered_map<uint32_t, Homogeneous> cache;
+        const auto h = [&](uint32_t v) -> const Homogeneous& {
+            auto it = cache.find(v);
+            if (it == cache.end()) it = cache.emplace(v, homogeneous(out_vrt_coords, v)).first;
+            return it->second;
+        };
+#endif
+        for (uint64_t i = lo; i < hi; ++i) {
+            const auto& t = out_tets[i];
+#ifndef USE_GNU_GMP_CLASSES
+            const int s = orientation_sign(h(t[0]), h(t[1]), h(t[2]), h(t[3]));
+            if (i % 997 == 0) {
+                cross_checked++;
+                if (sgn(signed_volume_x6(out_vrt_coords, t)) != s) disagreements++;
+            }
+#else
+            // GMP's rationals are fast enough to use directly.
+            const int s = sgn(signed_volume_x6(out_vrt_coords, t));
+#endif
+            if (s > 0) continue;
+            std::lock_guard<std::mutex> lock(bad_mutex);
+            bad.emplace_back(i, s);
+        }
+    });
+    std::sort(bad.begin(), bad.end());
+    INFO("orientation_sign cross-checked on " << cross_checked << " tets");
+    CHECK(disagreements == 0);
 
-    size_t inverted = 0, degenerate = 0, missing = 0;
-    for (const auto& kv : wanted) {
-        if (kv.second == SIZE_MAX) {
-            // The arrangement moved, so this test no longer covers what it was written
-            // for. Loud rather than silently vacuous.
-            ++missing;
-            UNSCOPED_INFO(
-                "tet [" << kv.first[0] << ", " << kv.first[1] << ", " << kv.first[2] << ", "
-                        << kv.first[3] << "] (sorted) is no longer in the output");
-            continue;
-        }
-        const auto& t = out_tets[kv.second];
-        const vol_rem::bigrational v = signed_volume_x6(out_vrt_coords, t);
-        if (v.sgn() <= 0) {
-            (v.sgn() < 0 ? inverted : degenerate)++;
-            UNSCOPED_INFO(
-                (v.sgn() < 0 ? "inverted" : "degenerate")
-                << " tet #" << kv.second << " = [" << t[0] << ", " << t[1] << ", " << t[2]
-                << ", " << t[3] << "]");
-        }
+    // A scoped INFO, not UNSCOPED_INFO: the latter would be consumed by the first CHECK
+    // below even when that one passes.
+    size_t inverted = 0, degenerate = 0;
+    std::ostringstream listing;
+    for (const auto& [i, s] : bad) {
+        (s < 0 ? inverted : degenerate)++;
+        if (inverted + degenerate > 10) continue;
+        const auto& t = out_tets[i];
+        listing << (s < 0 ? "inverted" : "degenerate") << " tet #" << i << " = [" << t[0] << ", "
+                << t[1] << ", " << t[2] << ", " << t[3] << "], 6*vol ~ "
+                << signed_volume_x6(out_vrt_coords, t).get_d() << "\n";
     }
-    CHECK(missing == 0);
+    INFO(listing.str());
     CHECK(degenerate == 0);
     CHECK(inverted == 0);
 
