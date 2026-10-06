@@ -147,9 +147,13 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.local.cmake")
 else()
 	# Pinned to exact commits for reproducible, byte-identical output across platforms
 	# (moving branch heads would let different CI runners fetch different sources).
+	# NFG 9b7635a (MarcoAttene/NFG#4) also counts _M_X64 as SSE2, so on MSVC x64 every
+	# translation unit gets the same (SIMD) interval_number layout whether or not it is
+	# built with /arch:AVX2 -- downstreams that link this library without that flag
+	# share NFG:: with it, and a layout mismatch swaps interval bounds across the link.
 	FetchContent_Declare(nfg
 		GIT_REPOSITORY https://github.com/MarcoAttene/nfg.git
-		GIT_TAG ecd60a840daabc2365e37cc47ee4634cbd0c0032
+		GIT_TAG 9b7635a044a71bdd3167274b64a72e9a44ca9319
 		SOURCE_SUBDIR do-not-configure
 	)
 
