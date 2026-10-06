@@ -25,7 +25,7 @@ namespace vol_rem {
 //   arrays (a dropped segment simply gets an empty edge list).
 //
 // OUTPUT
-//   vertices          2 bigrationals per output vertex (x,y), EXACT
+//   vertices          2 bigrationals per output vertex (x,y), EXACT and in lowest terms
 //   out_tris          output triangles, counterclockwise, indexing `vertices`
 //   out_segment_provenance
 //                     per INPUT segment, the output triangle edges tiling it, ordered from the

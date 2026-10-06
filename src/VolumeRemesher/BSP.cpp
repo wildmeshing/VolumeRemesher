@@ -13,6 +13,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include "parallel.h"
 
 #define OPPOSITE_SIGNE(a, b) (a < 0 && b > 0) || (a > 0 && b < 0)
 #define MIN_VECT_ELEM(v, n, it, i_min)    \
@@ -2699,43 +2700,6 @@ bool BSPcomplex::cell_is_tetrahedrizable_from_v(const BSPcell& cell, uint32_t v)
 }
 
 
-//
-//
-// Run fn over blocks of [0,n) on std::thread::hardware_concurrency() threads, dynamically
-// scheduled (atomic block-fetch) so uneven per-item cost stays balanced. Falls back to a
-// serial call for small n or a single hardware thread. Compiling with VOLUMEREMESHER_SERIAL_TET
-// (CMake: -DVOLUMEREMESHER_PARALLEL_TETRAHEDRALIZATION=OFF) forces the serial path everywhere.
-//
-// CAREFUL with exact arithmetic in here: bigrational, bigfloat and expansion all allocate
-// from thread-local pools, so such a value must be born, used and destroyed inside ONE call
-// of fn -- let only indices and other plain data escape. Computing them in parallel and
-// reading them after the join is a use-after-free that compiles cleanly and asserts nothing.
-// See the THREADING section of include/VolumeRemesher/numerics.h.
-template <class F>
-static void parallel_blocks(uint64_t n, F&& fn)
-{
-#ifdef VOLUMEREMESHER_SERIAL_TET
-    fn(uint64_t(0), n);
-#else
-    unsigned nthreads = std::thread::hardware_concurrency();
-    if (nthreads == 0) nthreads = 1;
-    if (nthreads == 1 || n < 512) {
-        fn(uint64_t(0), n);
-        return;
-    }
-    std::atomic<uint64_t> next{0};
-    const uint64_t block = 64;
-    auto runner = [&]() {
-        uint64_t i;
-        while ((i = next.fetch_add(block)) < n) fn(i, std::min(n, i + block));
-    };
-    std::vector<std::thread> pool;
-    pool.reserve(nthreads);
-    for (unsigned t = 0; t < nthreads; t++) pool.emplace_back(runner);
-    for (std::thread& t : pool) t.join();
-#endif
-}
-
 void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
 {
     uint64_t tet_num = 0; // total number of tetrahedra in which the cell will
@@ -2890,8 +2854,8 @@ void BSPcomplex::makeTetrahedra(bool verbose, bool keep_all_cells)
     //
     // Define VOLUMEREMESHER_CHECK_ALL_TET_VOLUMES to check every tet regardless.
     //
-    // The rationals stay inside one parallel task (thread-local pools -- see the THREADING
-    // section of include/VolumeRemesher/numerics.h); only a counter comes out. The
+    // The rationals stay inside one parallel task (thread-local pools -- see
+    // parallel_blocks in parallel.h); only a counter comes out. The
     // per-call cache pays off because consecutive tets are one cell's fan and repeat its
     // vertices.
     {

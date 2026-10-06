@@ -21,7 +21,8 @@ namespace vol_rem {
 /// <param name="tet_indexes">Tet indexes of M (t1_v1, t1_v2, t1_v3, t1_v4, t2_v1, t2_v2, t2_v3, t2_v4, ...)</param>
 ///
 /// OUTPUT (M')
-/// <param name="vertices">Vertex coordinates of M' (x1,y1,z1,x2,y2,z2,...,xn,yn,zn)</param>
+/// <param name="vertices">Vertex coordinates of M' (x1,y1,z1,x2,y2,z2,...,xn,yn,zn), exact and
+/// in lowest terms</param>
 /// <param name="facets">Polygonal facets in M'. A facet with n vertices is a sequence (n, p_v1, p_v2, ..., p_vn).
 /// The first number in the sequence is the number of vertices in the polygon, whereas the subsequent n numbers are its
 /// vertex indexes.</param>

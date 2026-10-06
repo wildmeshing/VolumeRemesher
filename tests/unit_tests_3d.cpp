@@ -9,8 +9,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <VolumeRemesher/embed.h>
+#include <VolumeRemesher/exact_coords.h>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -102,7 +104,114 @@ EmbedOut embed(const std::vector<double>& tri_coords, const std::vector<uint32_t
     return o;
 }
 
+// True iff r is in lowest terms: numerator and denominator coprime, denominator positive.
+bool in_lowest_terms(const vol_rem::bigrational& r)
+{
+#ifdef USE_GNU_GMP_CLASSES
+    mpz_class g;
+    mpz_gcd(g.get_mpz_t(), r.get_num_mpz_t(), r.get_den_mpz_t());
+    return g == 1 && r.get_den() > 0;
+#else
+    if (r.sgn() == 0) return r.get_num().empty();
+    return !r.get_den().empty() && r.get_num().GCD(r.get_den()).isOne();
+#endif
+}
+
+// True iff r's denominator is not a power of two, i.e. reducing r took a real GCD.
+bool has_odd_denominator_factor(const vol_rem::bigrational& r)
+{
+#ifdef USE_GNU_GMP_CLASSES
+    return mpz_scan1(r.get_den_mpz_t(), 0) + 1 != mpz_sizeinbase(r.get_den_mpz_t(), 2);
+#else
+    if (r.sgn() == 0) return false;
+    const vol_rem::bignatural& d = r.get_den();
+    return d.getNumSignificantBits() != d.countEndingZeroes() + 1;
+#endif
+}
+
 } // namespace
+
+TEST_CASE("exact_coords_reduced returns each coordinate in lowest terms", "[exact_coords]")
+{
+    // Enough points for parallel_blocks to actually fan out: it stays serial below 512.
+    const uint64_t n = 5000;
+    // Coordinate k of point i, as a quotient of bigrationals. NFG's bigrational quotient does
+    // not reduce (3.0 / 6.0 comes back as 3/6), which is the situation exact_coords_reduced
+    // exists for; the powers of two exercise the factors of two that canonicalize strips first.
+    // (The explicit return type matters with GMP: an auto-deduced one would be an
+    // expression template referring to the locals.)
+    const auto value = [](uint64_t i, int k) -> vol_rem::bigrational {
+        const vol_rem::bigrational num(double(3 * (i + k)));
+        const vol_rem::bigrational den(std::ldexp(double(6 * (k + 1)), -int(i % 5)));
+        return num / den;
+    };
+    const auto get = [&](uint64_t i, vol_rem::bigrational* c) {
+        for (int k = 0; k < 3; k++) c[k] = value(i, k);
+        return true;
+    };
+
+    std::vector<vol_rem::bigrational> out;
+    REQUIRE(vol_rem::exact_coords_reduced<3>(n, get, out));
+    REQUIRE(out.size() == 3 * n);
+
+    uint64_t not_reduced = 0, wrong_value = 0;
+    for (uint64_t i = 0; i < n; i++) {
+        for (int k = 0; k < 3; k++) {
+            if (!in_lowest_terms(out[3 * i + k])) not_reduced++;
+            if (out[3 * i + k] != value(i, k)) wrong_value++;
+        }
+    }
+    CHECK(not_reduced == 0);
+    CHECK(wrong_value == 0);
+
+    // Point 5, coordinate 0 is 15 / 6, which must come back as 5 / 2. (Compared into bools:
+    // Catch2 cannot print GMP operands without libgmpxx.)
+    const vol_rem::bigrational five_halves(2.5);
+    const bool same_num = out[3 * 5].get_num() == five_halves.get_num();
+    const bool same_den = out[3 * 5].get_den() == five_halves.get_den();
+    CHECK(same_num);
+    CHECK(same_den);
+
+    // A failure anywhere is reported, whichever thread hits it.
+    std::vector<vol_rem::bigrational> out2;
+    CHECK_FALSE(
+        vol_rem::exact_coords_reduced<3>(
+            n,
+            [&](uint64_t i, vol_rem::bigrational* c) { return i != 4321 && get(i, c); },
+            out2));
+}
+
+TEST_CASE("embed_tri_in_poly_mesh returns exact coordinates in lowest terms", "[embed3d]")
+{
+    // Random triangles crossing each other inside the box, so most output vertices are
+    // implicit (edge-triangle and three-plane intersections) with denominators that need a
+    // real GCD -- and there are enough of them for the coordinate pass to run in parallel.
+    uint64_t s = 0x9E3779B97F4A7C15ull;
+    const auto rnd = [&s]() {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        return -0.5 + 2.0 * double(s >> 11) * (1.0 / 9007199254740992.0);
+    };
+    const uint32_t num_tris = 12;
+    std::vector<double> tri_coords;
+    std::vector<uint32_t> tri_idx;
+    for (uint32_t t = 0; t < num_tris; t++) {
+        for (int k = 0; k < 9; k++) tri_coords.push_back(rnd());
+        tri_idx.insert(tri_idx.end(), {3 * t, 3 * t + 1, 3 * t + 2});
+    }
+
+    const EmbedOut o = embed(tri_coords, tri_idx);
+
+    REQUIRE(o.vertices.size() >= 3 * 512);
+    uint64_t not_reduced = 0, odd_denominators = 0;
+    for (const vol_rem::bigrational& c : o.vertices) {
+        if (!in_lowest_terms(c)) not_reduced++;
+        if (has_odd_denominator_factor(c)) odd_denominators++;
+    }
+    CHECK(not_reduced == 0);
+    CHECK(odd_denominators > 0);
+}
 
 // out_triangle_group is what makes out_triangle_provenance usable: without it a caller holds
 // per-group face lists and no way back to the input triangle, hence no way to carry a

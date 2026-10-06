@@ -26,6 +26,8 @@ set (SOURCES
     src/VolumeRemesher/BSP.h
     src/VolumeRemesher/BSP.cpp
     src/VolumeRemesher/inOutPartition.cpp
+    src/VolumeRemesher/parallel.h
+    src/VolumeRemesher/exact_coords.h
     # 2D pipeline: segment arrangement -> triangles
     src/VolumeRemesher/2d/predicates2d.h
     src/VolumeRemesher/2d/predicates2d.cpp
@@ -195,8 +197,9 @@ target_include_directories(${PROJECT_NAME}_lib PUBLIC
 target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_20)
 
 # Parallelize the tetrahedralization (makeTetrahedra: the per-cell decomposition and the
-# winding-flip) with std::thread. On by default; turn OFF for a fully serial build. The output
-# is byte-identical either way.
+# winding-flip) and the exact output coordinates of embed_tri_in_poly_mesh and
+# embed_seg_in_tri_mesh with std::thread. On by default; turn OFF for a fully serial build.
+# The output is byte-identical either way.
 option(VOLUMEREMESHER_PARALLEL_TETRAHEDRALIZATION
 	"Parallelize makeTetrahedra with std::thread" ON)
 if(VOLUMEREMESHER_PARALLEL_TETRAHEDRALIZATION)
