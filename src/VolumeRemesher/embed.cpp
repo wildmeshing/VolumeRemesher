@@ -1,4 +1,5 @@
 #include "embed.h"
+#include <memory>
 #include <vector>
 #include "BSP.h"
 #include "exact_coords.h"
@@ -49,6 +50,10 @@ void embed_tri_in_poly_mesh(
         verbose,
         true,
         has_extra ? &extra : nullptr);
+    // Owned here: everything below copies out of the complex, nothing returned points into it.
+    // It used to be leaked, which kept the whole BSP arrangement -- the largest structure the
+    // remesher builds -- allocated for the rest of the caller's process.
+    const std::unique_ptr<BSPcomplex> complex_owner(complex);
 
     // Triangulate every (convex) BSP face so the output facets are all triangles,
     // then tetrahedralize the whole complex. keep_all_cells=true is essential
