@@ -151,9 +151,13 @@ else()
 	# translation unit gets the same (SIMD) interval_number layout whether or not it is
 	# built with /arch:AVX2 -- downstreams that link this library without that flag
 	# share NFG:: with it, and a layout mismatch swaps interval bounds across the link.
+	# On top of it, wildmeshing/NFG#1 adds bignatural::trimMemoryPool(), which lets a
+	# caller return the memory the thread-local bignatural pool grew into during an
+	# arrangement; the pool otherwise never shrinks. Back to upstream once it is merged
+	# there. fast-envelope pins the same commit: see its cmake/recipes/ipred.cmake.
 	FetchContent_Declare(nfg
-		GIT_REPOSITORY https://github.com/MarcoAttene/nfg.git
-		GIT_TAG 9b7635a044a71bdd3167274b64a72e9a44ca9319
+		GIT_REPOSITORY https://github.com/wildmeshing/NFG.git
+		GIT_TAG 05f99ea5584d8ba180ea35f878b0c02f2f888fd6
 		SOURCE_SUBDIR do-not-configure
 	)
 
