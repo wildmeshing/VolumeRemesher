@@ -430,6 +430,20 @@ def _wrap_mesh(m: _core.Mesh) -> Union[VolumeMesh, SurfaceMesh]:
 # --------------------------------------------------------------------------------------------
 # Pipeline
 # --------------------------------------------------------------------------------------------
+def set_num_threads(n: int) -> None:
+    """Run the parallel passes on ``n`` threads; ``0`` restores the default (:func:`get_num_threads`)."""
+    if n < 0:
+        raise ValueError(f"n must be >= 0, got {n}")
+    _core.set_num_threads(n)
+
+
+def get_num_threads() -> int:
+    """The threads of the parallel passes: :func:`set_num_threads`, else the
+    ``VOLUMEREMESHER_NUM_THREADS`` environment variable, else the CPUs this process may run on
+    (its affinity mask on Linux, e.g. under ``taskset`` or a batch scheduler)."""
+    return _core.get_num_threads()
+
+
 def remesh(
     surface: Optional[SurfaceLike] = None,
     *,

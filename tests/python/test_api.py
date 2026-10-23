@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from fractions import Fraction
 
 import numpy as np
@@ -170,6 +172,38 @@ def test_rounding_mode_is_restored_and_results_repeat():
         assert np.array_equal(first.vertices, again.vertices)
         assert np.array_equal(first.tets, again.tets)
         assert first.exact_vertices == again.exact_vertices
+
+
+def test_num_threads():
+    """set_num_threads overrides the default thread count and 0 restores it; the result does
+    not depend on the thread count."""
+    default = vr.get_num_threads()
+    assert default >= 1
+    if hasattr(os, "sched_getaffinity") and "VOLUMEREMESHER_NUM_THREADS" not in os.environ:
+        assert default == len(os.sched_getaffinity(0))
+    p = model("bunny.off")
+    try:
+        vr.set_num_threads(1)
+        assert vr.get_num_threads() == 1
+        one = vr.remesh(p, tetrahedralize=True, exact=True)
+        vr.set_num_threads(4)
+        assert vr.get_num_threads() == 4
+        four = vr.remesh(p, tetrahedralize=True, exact=True)
+    finally:
+        vr.set_num_threads(0)
+    assert vr.get_num_threads() == default
+    assert np.array_equal(one.vertices, four.vertices) and np.array_equal(one.tets, four.tets)
+    assert one.exact_vertices == four.exact_vertices
+    with pytest.raises(ValueError):
+        vr.set_num_threads(-1)
+
+
+def test_num_threads_environment_variable():
+    env = dict(os.environ, VOLUMEREMESHER_NUM_THREADS="3")
+    code = "import volume_remesher as vr; print(vr.get_num_threads())"
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "3"
 
 
 def test_save_writes_the_sidecars(tmp_path):

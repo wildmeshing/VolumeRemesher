@@ -39,6 +39,7 @@
 #include <VolumeRemesher/driver.h>
 #include <VolumeRemesher/embed.h>
 #include <VolumeRemesher/2d/embed2d.h>
+#include <VolumeRemesher/parallel.h>
 
 #include <cfenv>
 #include <cstdint>
@@ -750,6 +751,18 @@ NB_MODULE(_core, m)
     m.def(
         "embed_segments", &py_embed_segments, "points"_a, "segments"_a, "verbose"_a,
         "embed_seg_in_tri_mesh: the 2D arrangement with exact coordinates in lowest terms.");
+
+    // --- threads ---------------------------------------------------------------------------------
+    m.def(
+        "set_num_threads",
+        &vol_rem::set_num_threads,
+        "n"_a,
+        "Threads of the parallel passes; 0 restores the default (see get_num_threads).");
+    m.def(
+        "get_num_threads",
+        &vol_rem::num_threads,
+        "Threads of the parallel passes: set_num_threads(n), else VOLUMEREMESHER_NUM_THREADS, "
+        "else the CPUs this process may run on (its affinity mask on Linux).");
 
     // --- process state, for the tests --------------------------------------------------------
     m.def(

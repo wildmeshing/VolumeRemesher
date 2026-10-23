@@ -74,6 +74,8 @@ static int run(int argc, char** argv)
                "  U -> union (AuB),\n"
                "  I -> intersection (A^B),\n"
                "  D -> difference (A\\B)\n\n"
+               "The parallel passes run on VOLUMEREMESHER_NUM_THREADS threads if set, else on\n"
+               "the CPUs the process may run on.\n\n"
                "Example:\n"
                "mesh_generator ant.off U pig.off\n");
         return 0;

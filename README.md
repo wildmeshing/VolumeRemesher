@@ -133,7 +133,7 @@ both.vertices, both.tets                                # numpy arrays, ready fo
 | `embed_exact(surface, tet_mesh, *, edges, points)` | C++ `embed_tri_in_poly_mesh` | `PolyhedralEmbedding`: exact vertices, polyhedral facets and cells, tets, full provenance |
 | `arrange_2d_exact(segments)` | C++ `embed_seg_in_tri_mesh` | `SegmentEmbedding`: exact vertices, triangles, provenance |
 
-Errors — a missing or malformed file, a vertex outside the tet mesh, an input that cannot be meshed — raise `vr.VolumeRemesherError` with the tool's message; the interpreter is never terminated. The pipeline runs on its own thread with the GIL released, and its floating point rounding mode never leaks into the calling thread. Progress output (`verbose=True`) goes to the C standard output, as in the tool; `log=True` appends to `mesh_generator.log` in the working directory.
+Errors — a missing or malformed file, a vertex outside the tet mesh, an input that cannot be meshed — raise `vr.VolumeRemesherError` with the tool's message; the interpreter is never terminated. The pipeline runs on its own thread with the GIL released, and its floating point rounding mode never leaks into the calling thread. Its parallel passes use `vr.get_num_threads()` threads: `vr.set_num_threads(n)`, else the `VOLUMEREMESHER_NUM_THREADS` environment variable, else the CPUs the process may run on (its affinity mask on Linux, e.g. under `taskset` or a batch scheduler). Progress output (`verbose=True`) goes to the C standard output, as in the tool; `log=True` appends to `mesh_generator.log` in the working directory.
 
 ### The command line, in Python
 
