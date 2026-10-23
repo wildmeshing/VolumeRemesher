@@ -227,14 +227,14 @@ class VolumeMesh:
     """
 
     #: ``(n, 3)`` float64. The double approximation of the exact vertex positions, the same
-    #: numbers the ``.tet``/``.msh`` file holds.
+    #: numbers the ``.tet``/``.msh`` file holds; with ``round_vertices=True`` the nearest doubles.
     vertices: np.ndarray
     #: ``(m, 4)`` uint32, or ``None`` for a polyhedral mesh.
     tets: Optional[np.ndarray]
     #: The polyhedral cells as vertex lists, or ``None`` for a tetrahedral mesh.
     cells: Optional[Ragged]
     #: Per coplanar group of input triangles, the ``(k, 4)`` ``{tet, v0, v1, v2}`` output faces
-    #: tiling it. Tetrahedral meshes only.
+    #: tiling it. Tetrahedral meshes with ``face_provenance="groups"`` only.
     triangle_provenance: Ragged
     #: ``(c, 2)`` ``{input_triangle_id, coplanar_group_id}`` per non-degenerate input triangle.
     constraint_groups: np.ndarray
@@ -246,6 +246,10 @@ class VolumeMesh:
     #: ``(p, 3)`` int64 ``{point_id, tet, vertex}`` per input point; ``-1`` where it did not
     #: survive.
     point_provenance: np.ndarray
+    #: ``(m,)`` uint8 with ``face_provenance="faces"``, else ``None``: bit ``i`` of entry ``t``
+    #: is set iff the face of tet ``t`` opposite its vertex ``i`` tiles input triangles (the
+    #: faces ``triangle_provenance`` would list, marked on both their tets).
+    surface_faces: Optional[np.ndarray]
     _core_mesh: _core.Mesh = field(repr=False, compare=False)
     _exact: list[str] = field(default_factory=list, repr=False, compare=False)
 
@@ -408,7 +412,19 @@ class SegmentEmbedding:
         return f"SegmentEmbedding({self.num_vertices} vertices, {len(self.triangles)} triangles)"
 
 
-def _wrap_mesh(m: _core.Mesh) -> Union[VolumeMesh, SurfaceMesh]:
+_FACE_PROVENANCE = ("groups", "faces", "none")
+
+
+def _check_tet_options(tetrahedralize: bool, exact: bool, face_provenance: str, round_vertices: bool):
+    if exact and not tetrahedralize:
+        raise ValueError("exact=True needs tetrahedralize=True")
+    if face_provenance not in _FACE_PROVENANCE:
+        raise ValueError(f"face_provenance must be one of {_FACE_PROVENANCE}, got {face_provenance!r}")
+    if (face_provenance != "groups" or round_vertices) and not tetrahedralize:
+        raise ValueError("face_provenance and round_vertices need tetrahedralize=True")
+
+
+def _wrap_mesh(m: _core.Mesh, face_provenance: str = "groups") -> Union[VolumeMesh, SurfaceMesh]:
     if m.kind != _core.OutputKind.VOLUME:
         return SurfaceMesh(vertices=m.coords, faces=Ragged(m.face_offsets, m.face_vertices), _core_mesh=m)
     tetrahedral = m.tetrahedral
@@ -422,6 +438,7 @@ def _wrap_mesh(m: _core.Mesh) -> Union[VolumeMesh, SurfaceMesh]:
         edge_ids=m.edge_ids,
         edge_provenance=Ragged(m.edge_provenance_offsets, m.edge_provenance),
         point_provenance=_signed(m.point_provenance),
+        surface_faces=m.surface_faces if tetrahedral and face_provenance == "faces" else None,
         _core_mesh=m,
         _exact=list(m.exact_coords),
     )
@@ -439,6 +456,8 @@ def remesh(
     keep_all_cells: bool = False,
     fill_holes: bool = False,
     exact: bool = False,
+    face_provenance: str = "groups",
+    round_vertices: bool = False,
     output: str = "volume",
     verbose: bool = False,
     log: bool = False,
@@ -462,6 +481,14 @@ def remesh(
         exact: ``-r``. Also compute the exact rational vertex coordinates
             (:attr:`VolumeMesh.exact_vertices`, and the ``.rational`` sidecar on save). Needs
             ``tetrahedralize``.
+        face_provenance: with ``tetrahedralize``, how the output faces on the input surface are
+            reported: ``"groups"`` (default) per coplanar group of input triangles
+            (:attr:`VolumeMesh.triangle_provenance`, ``constraint_groups``); ``"faces"`` only
+            which tet faces they are (:attr:`VolumeMesh.surface_faces`), which skips the
+            grouping; ``"none"`` not at all. No command line counterpart.
+        round_vertices: with ``tetrahedralize``, :attr:`VolumeMesh.vertices` are the nearest
+            doubles of the exact vertex positions instead of approximations (which can be an
+            ulp or so off). No command line counterpart.
         output: ``"volume"`` (default), ``"skin"`` (``-s``) or ``"black_faces"`` (``-b``).
         verbose: ``-v``. Progress on the C stdout.
         log: ``-l``. Append a timing line to ``mesh_generator.log`` in the working directory.
@@ -475,15 +502,15 @@ def remesh(
     """
     if surface is None and edges is None and points is None:
         raise ValueError("provide a surface and/or edges and/or points")
-    if exact and not tetrahedralize:
-        raise ValueError("exact=True needs tetrahedralize=True")
+    _check_tet_options(tetrahedralize, exact, face_provenance, round_vertices)
     A, path = (None, None) if surface is None else _surface(surface, verbose)
     core = _core.make_mesh(
         A, name or path or ("<array>" if A is not None else None), "0", None, None,
         _edges(edges, verbose), _points(points, verbose),
         verbose, log, tetrahedralize, exact, fill_holes, keep_all_cells, _output_kind(output),
+        face_provenance, round_vertices,
     )
-    return _wrap_mesh(core)
+    return _wrap_mesh(core, face_provenance)
 
 
 def boolean(
@@ -497,6 +524,8 @@ def boolean(
     keep_all_cells: bool = False,
     fill_holes: bool = False,
     exact: bool = False,
+    face_provenance: str = "groups",
+    round_vertices: bool = False,
     output: str = "volume",
     verbose: bool = False,
     log: bool = False,
@@ -511,8 +540,7 @@ def boolean(
         opcode = _BOOLEAN_OPS[op]
     except KeyError:
         raise ValueError(f"op must be union/intersection/difference (or U/I/D), got {op!r}") from None
-    if exact and not tetrahedralize:
-        raise ValueError("exact=True needs tetrahedralize=True")
+    _check_tet_options(tetrahedralize, exact, face_provenance, round_vertices)
     A, path_a = _surface(a, verbose)
     B, path_b = _surface(b, verbose)
     name_a, name_b = names if names else (path_a or "<array A>", path_b or "<array B>")
@@ -520,8 +548,9 @@ def boolean(
         A, name_a, opcode, B, name_b,
         _edges(edges, verbose), _points(points, verbose),
         verbose, log, tetrahedralize, exact, fill_holes, keep_all_cells, _output_kind(output),
+        face_provenance, round_vertices,
     )
-    return _wrap_mesh(core)
+    return _wrap_mesh(core, face_provenance)
 
 
 def embed(
@@ -532,6 +561,8 @@ def embed(
     points: Optional[PointsLike] = None,
     tetrahedralize: bool = False,
     exact: bool = False,
+    face_provenance: str = "groups",
+    round_vertices: bool = False,
     output: str = "volume",
     verbose: bool = False,
 ) -> Union[VolumeMesh, SurfaceMesh]:
@@ -541,17 +572,16 @@ def embed(
     Equivalent to ``mesh_generator surface.off U mesh.tet [-e] [-p] [-t] [-r] [-s | -b]``
     (the boolean letter is a separator the tool requires and does not use). The tet mesh must
     be convex and every input vertex must lie strictly inside it, or coincide with one of its
-    vertices. The whole domain is kept.
+    vertices. The whole domain is kept. The other arguments are those of :func:`remesh`.
     """
-    if exact and not tetrahedralize:
-        raise ValueError("exact=True needs tetrahedralize=True")
+    _check_tet_options(tetrahedralize, exact, face_provenance, round_vertices)
     A, _ = _surface(surface, verbose)
     T = _tetmesh(tet_mesh, verbose)
     core = _core.embed_mesh(
         A, T, "0", _edges(edges, verbose), _points(points, verbose),
-        verbose, tetrahedralize, exact, _output_kind(output),
+        verbose, tetrahedralize, exact, _output_kind(output), face_provenance, round_vertices,
     )
-    return _wrap_mesh(core)
+    return _wrap_mesh(core, face_provenance)
 
 
 def arrange_2d(

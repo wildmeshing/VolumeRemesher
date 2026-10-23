@@ -25,6 +25,9 @@ struct MeshOptions
     bool fill_holes = false; // -f  cap open boundaries (solid-output path only)
     bool keep_all_cells = false; // -a  skip the in/out min-cut, keep the whole domain
     MeshOutput::Kind output = MeshOutput::VOLUME; // default / -s (SKIN) / -b (BLACK_FACES)
+    // With triangulate (no command line flags):
+    FaceProvenance face_provenance = FaceProvenance::GROUPS; // how faces on the input are reported
+    bool round_vertices = false; // coords: nearest doubles of the exact coordinates
 };
 
 // The file mesh_generator writes for these options: volume.msh, volume.tet, skin.off or

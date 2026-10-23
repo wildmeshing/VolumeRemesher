@@ -48,7 +48,13 @@ MeshOutput extract_and_free(BSPcomplex* complex, char bool_opcode, const MeshOpt
     else if (opts.output == MeshOutput::SKIN)
         complex->extractSurface(bool_opcode, opts.triangulate, false, out.surface);
     else
-        complex->extractVolume(bool_opcode, opts.triangulate, opts.export_rational, out.volume);
+        complex->extractVolume(
+            bool_opcode,
+            opts.triangulate,
+            opts.export_rational,
+            out.volume,
+            opts.face_provenance,
+            opts.round_vertices);
     return out;
 }
 
