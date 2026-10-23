@@ -398,15 +398,6 @@ public:
 
     // Upload Delaunay triangolation
     uint64_t removing_ghost_tets(const TetMesh* mesh, vector<uint64_t>& new_order);
-    uint64_t add_tetEdge(
-        const TetMesh* mesh,
-        uint32_t e0,
-        uint32_t e1,
-        uint64_t tet_ind,
-        const vector<uint64_t>& new_order);
-    inline uint64_t
-    add_tetFace(uint32_t v0, uint32_t v1, uint32_t v2, uint64_t cell_ind, uint64_t adjCell_ind);
-    inline bool tet_face_isNew(uint64_t tet_ind, uint64_t adjTet_ind, uint64_t adjCell_ind);
     inline void fill_face_colour(
         uint64_t tet_ind,
         uint64_t face_ind,
