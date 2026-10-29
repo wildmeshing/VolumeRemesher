@@ -29,6 +29,13 @@ struct SurfaceOutput
     uint64_t num_faces() const { return face_offsets.empty() ? 0 : face_offsets.size() - 1; }
 };
 
+// How a tetrahedralization reports its faces on the input surface.
+enum class FaceProvenance {
+    GROUPS, // triangle_provenance per coplanar group of input triangles, and constraint_groups
+    FACES, // only surface_faces: which tet faces tile input triangles, without the grouping
+    NONE // neither
+};
+
 // The volume: polyhedral cells (volume.msh) or tetrahedra plus provenance (volume.tet and its
 // sidecar files).
 struct VolumeOutput
@@ -45,6 +52,12 @@ struct VolumeOutput
     // Per real input constraint: {input_triangle_id, coplanar_group_id}.
     std::vector<std::array<uint32_t, 2>> constraint_groups;
     uint32_t num_coplanar_groups = 0;
+    // FaceProvenance::FACES: per tet, bit i set iff its face opposite vertex i tiles input
+    // triangles (the faces triangle_provenance lists, marked on both their tets).
+    std::vector<uint8_t> surface_faces;
+    // Which of the above was computed. write_volume writes the .triangleprov and .groups
+    // sidecars only for GROUPS (the tool's behaviour); they would otherwise be empty.
+    FaceProvenance face_provenance = FaceProvenance::GROUPS;
     struct EdgeProvenance
     {
         uint32_t edge_id;

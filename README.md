@@ -69,6 +69,9 @@ mesh = vr.remesh("models/cube_subdiv.off", tetrahedralize=True, exact=True, keep
 mesh.exact_vertices      # list of (Fraction, Fraction, Fraction): the exact positions
 mesh.triangle_provenance # per coplanar group of input triangles, the {tet, v0, v1, v2} faces tiling it
 mesh.constraint_groups   # (c, 2): input triangle -> coplanar group
+# Cheaper variants, Python only: face_provenance="faces" gives just which tet faces lie on the
+# input (mesh.surface_faces, a per-tet bitmask) without the coplanar grouping, "none" nothing;
+# round_vertices=True makes mesh.vertices the nearest doubles of the exact positions.
 
 # 5) Insert edges and points, with tracking            mesh_generator sphere.off -t -r -a -e ... -p ...
 mesh = vr.remesh("models/sphere.off", edges="models/sphere_edges.off", points="models/sphere_points.off",
@@ -128,9 +131,9 @@ both.vertices, both.tets                                # numpy arrays, ready fo
 
 | Function | Command line | Returns |
 | --- | --- | --- |
-| `remesh(surface, *, edges, points, tetrahedralize, keep_all_cells, fill_holes, exact, output, classifier, verbose, log)` | `mesh_generator A.off [-e] [-p] [-t] [-a] [-f] [-r] [-s\|-b] [-c] [-v] [-l]` | `VolumeMesh`, or `SurfaceMesh` for `output="skin"` (`-s`) / `"black_faces"` (`-b`) |
+| `remesh(surface, *, edges, points, tetrahedralize, keep_all_cells, fill_holes, exact, face_provenance, round_vertices, output, classifier, verbose, log)` | `mesh_generator A.off [-e] [-p] [-t] [-a] [-f] [-r] [-s\|-b] [-c] [-v] [-l]` | `VolumeMesh`, or `SurfaceMesh` for `output="skin"` (`-s`) / `"black_faces"` (`-b`) |
 | `boolean(a, b, op, ...)` | `mesh_generator A.off {U\|I\|D} B.off ...` | same |
-| `embed(surface, tet_mesh, *, edges, points, tetrahedralize, exact, output, classifier, verbose)` | `mesh_generator A.off U B.tet ...` | same |
+| `embed(surface, tet_mesh, *, edges, points, tetrahedralize, exact, face_provenance, round_vertices, output, classifier, verbose)` | `mesh_generator A.off U B.tet ...` | same |
 | `arrange_2d(segments, *, exact, verbose)` | `mesh_generator soup.obj -2d [-r]` | `Arrangement` |
 | `embed_exact(surface, tet_mesh, *, edges, points)` | C++ `embed_tri_in_poly_mesh` | `PolyhedralEmbedding`: exact vertices, polyhedral facets and cells, tets, full provenance |
 | `arrange_2d_exact(segments)` | C++ `embed_seg_in_tri_mesh` | `SegmentEmbedding`: exact vertices, triangles, provenance |

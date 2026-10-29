@@ -56,8 +56,10 @@ void write_volume(const char* filename, const VolumeOutput& out)
         // it: "<group_id> <num_faces> <tet v0 v1 v2> <tet v0 v1 v2> ...", where tet is the
         // output tet index (0-based, matching the tet block above) and v0 v1 v2 are its
         // face's output vertex indices. (A face on two overlapping coplanar surfaces is
-        // listed under both groups; group sizes are in the .groups sidecar.)
-        {
+        // listed under both groups; group sizes are in the .groups sidecar.) Only when the
+        // grouped provenance was computed: with FaceProvenance::FACES or NONE there is nothing
+        // to list, and the tool itself always computes it.
+        if (out.face_provenance == FaceProvenance::GROUPS) {
             std::ofstream pf((std::string(filename) + ".triangleprov").c_str(), std::ios::binary);
             pf << "# group_id num_faces tet v0 v1 v2 ...\n";
             pf << out.triangle_provenance.size() << "\n";
@@ -74,7 +76,7 @@ void write_volume(const char* filename, const VolumeOutput& out)
         // "<input_triangle_id> <coplanar_group_id>". input_triangle_id is the triangle's
         // index in the INPUT file (degenerate/collinear input triangles are dropped by
         // the mesher, so this is not simply 0..n-1 when the input has any).
-        {
+        if (out.face_provenance == FaceProvenance::GROUPS) {
             std::ofstream gf((std::string(filename) + ".groups").c_str(), std::ios::binary);
             gf << "# input_triangle_id coplanar_group_id\n";
             gf << out.constraint_groups.size() << " " << out.num_coplanar_groups << "\n";

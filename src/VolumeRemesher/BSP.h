@@ -261,6 +261,9 @@ public:
     // three output vertices (vertices[] ids) of that tet's face. A face on two overlapping
     // coplanar surfaces is listed under both their groups. Filled by trackFaceProvenance.
     std::vector<std::vector<std::array<uint32_t, 4>>> triangle_provenance;
+    // FaceProvenance::FACES instead: per output tet, bit i set iff its face opposite local
+    // vertex i tiles input triangles. Filled by trackFaceProvenance.
+    std::vector<uint8_t> tet_surface_faces;
 
     // Provenance of inserted edges/points (see insert_edges_and_points +
     // trackEdgePointProvenance). Filled during makeTetrahedra.
@@ -343,8 +346,15 @@ public:
 
     // The volume as polyhedral cells, or (tetrahedrize) as tetrahedra with provenance and,
     // on request, exact coordinates. Mutates the complex like extractSurface; once per complex.
+    // With tetrahedrize, round_vertices makes out.coords the nearest doubles of the exact
+    // coordinates instead of their approximations.
     void extractVolume(
-        const char bool_opcode, bool tetrahedrize, bool export_rational, VolumeOutput& out);
+        const char bool_opcode,
+        bool tetrahedrize,
+        bool export_rational,
+        VolumeOutput& out,
+        FaceProvenance face_provenance = FaceProvenance::GROUPS,
+        bool round_vertices = false);
 
     // Save the faces representing the input constraints (= extractSurface + write_surface_off)
     void saveBlackFaces(const char* filename, bool triangulate = false);
@@ -499,7 +509,10 @@ public:
     // keep_all_cells=true tetrahedralizes EVERY cell, ignoring the INTERNAL_A
     // boolean classification. The surface-embedding path uses this because it
     // keeps the whole background domain instead of one boolean region.
-    void makeTetrahedra(bool verbose = false, bool keep_all_cells = false);
+    void makeTetrahedra(
+        bool verbose = false,
+        bool keep_all_cells = false,
+        FaceProvenance face_provenance = FaceProvenance::GROUPS);
 
     // Partitions the input constraints into edge-connected coplanar groups.
     void computeCoplanarGroups();
@@ -509,9 +522,9 @@ public:
     // from makeTetrahedra after the tets are built.
     void trackEdgePointProvenance();
 
-    // Fills triangle_provenance: for each coplanar group, the output tet faces tiling it.
-    // Called from makeTetrahedra.
-    void trackFaceProvenance();
+    // Fills triangle_provenance: for each coplanar group, the output tet faces tiling it
+    // (GROUPS), or tet_surface_faces (FACES). Called from makeTetrahedra.
+    void trackFaceProvenance(FaceProvenance mode = FaceProvenance::GROUPS);
 };
 
 /// <summary>

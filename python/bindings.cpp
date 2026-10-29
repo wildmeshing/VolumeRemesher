@@ -261,7 +261,9 @@ MeshOptions make_options(
     bool fill_holes,
     bool keep_all_cells,
     MeshOutput::Kind output,
-    CellClassifier classifier)
+    CellClassifier classifier,
+    const std::string& face_provenance,
+    bool round_vertices)
 {
     MeshOptions o;
     o.verbose = verbose;
@@ -272,6 +274,15 @@ MeshOptions make_options(
     o.keep_all_cells = keep_all_cells;
     o.output = output;
     o.classifier = classifier;
+    if (face_provenance == "groups")
+        o.face_provenance = FaceProvenance::GROUPS;
+    else if (face_provenance == "faces")
+        o.face_provenance = FaceProvenance::FACES;
+    else if (face_provenance == "none")
+        o.face_provenance = FaceProvenance::NONE;
+    else
+        throw std::invalid_argument("face_provenance must be one of 'groups', 'faces', 'none'");
+    o.round_vertices = round_vertices;
     return o;
 }
 
@@ -300,12 +311,14 @@ std::unique_ptr<Mesh> py_make_mesh(
     bool fill_holes,
     bool keep_all_cells,
     MeshOutput::Kind output,
-    CellClassifier classifier)
+    CellClassifier classifier,
+    const std::string& face_provenance,
+    bool round_vertices)
 {
     const char op = parse_opcode(opcode);
     const MeshOptions opts = make_options(
         verbose, logging, triangulate, export_rational, fill_holes, keep_all_cells, output,
-        classifier);
+        classifier, face_provenance, round_vertices);
     // Copy the inputs while the GIL is held; the arrays may be temporaries.
     std::optional<TriMeshData> A, B;
     if (a) A = to_trimesh(*a);
@@ -344,11 +357,14 @@ std::unique_ptr<Mesh> py_embed_mesh(
     bool triangulate,
     bool export_rational,
     MeshOutput::Kind output,
-    CellClassifier classifier)
+    CellClassifier classifier,
+    const std::string& face_provenance,
+    bool round_vertices)
 {
     const char op = parse_opcode(opcode);
     const MeshOptions opts = make_options(
-        verbose, false, triangulate, export_rational, false, false, output, classifier);
+        verbose, false, triangulate, export_rational, false, false, output, classifier,
+        face_provenance, round_vertices);
     TriMeshData A = to_trimesh(a);
     TetMeshData T = to_tetmesh(tet_mesh);
     std::optional<EdgeData> E;
@@ -613,7 +629,9 @@ NB_MODULE(_core, m)
             })
         .def_prop_ro(
             "tets",
-            [](nb::handle_t<Mesh> h) { return view2(h, nb::cast<const Mesh&>(h).out.volume.tets, 4); })
+            [](nb::handle_t<Mesh> h) {
+                return view2(h, nb::cast<const Mesh&>(h).out.volume.tets, 4);
+            })
         .def_prop_ro(
             "cell_offsets",
             [](nb::handle_t<Mesh> h) {
@@ -625,11 +643,15 @@ NB_MODULE(_core, m)
                 return view1(h, nb::cast<const Mesh&>(h).out.volume.cell_vertices);
             })
         .def_prop_ro(
-            "exact_coords", [](const Mesh& s) { return s.out.volume.exact_coords; },
-            "3 strings per vertex, each '[-]num[/den]'; empty unless exact coordinates were asked for")
+            "exact_coords",
+            [](const Mesh& s) { return s.out.volume.exact_coords; },
+            "3 strings per vertex, each '[-]num[/den]'; empty unless exact coordinates were asked "
+            "for")
         .def_prop_ro(
             "triangle_provenance_offsets",
-            [](nb::handle_t<Mesh> h) { return view1(h, nb::cast<const Mesh&>(h).tri_prov_offsets); })
+            [](nb::handle_t<Mesh> h) {
+                return view1(h, nb::cast<const Mesh&>(h).tri_prov_offsets);
+            })
         .def_prop_ro(
             "triangle_provenance",
             [](nb::handle_t<Mesh> h) { return view2(h, nb::cast<const Mesh&>(h).tri_prov); })
@@ -639,12 +661,21 @@ NB_MODULE(_core, m)
                 return view2(h, nb::cast<const Mesh&>(h).out.volume.constraint_groups);
             })
         .def_prop_ro(
-            "num_coplanar_groups", [](const Mesh& s) { return s.out.volume.num_coplanar_groups; })
+            "num_coplanar_groups",
+            [](const Mesh& s) { return s.out.volume.num_coplanar_groups; })
         .def_prop_ro(
-            "edge_ids", [](nb::handle_t<Mesh> h) { return view1(h, nb::cast<const Mesh&>(h).edge_ids); })
+            "surface_faces",
+            [](nb::handle_t<Mesh> h) {
+                return view1(h, nb::cast<const Mesh&>(h).out.volume.surface_faces);
+            })
+        .def_prop_ro(
+            "edge_ids",
+            [](nb::handle_t<Mesh> h) { return view1(h, nb::cast<const Mesh&>(h).edge_ids); })
         .def_prop_ro(
             "edge_provenance_offsets",
-            [](nb::handle_t<Mesh> h) { return view1(h, nb::cast<const Mesh&>(h).edge_prov_offsets); })
+            [](nb::handle_t<Mesh> h) {
+                return view1(h, nb::cast<const Mesh&>(h).edge_prov_offsets);
+            })
         .def_prop_ro(
             "edge_provenance",
             [](nb::handle_t<Mesh> h) { return view2(h, nb::cast<const Mesh&>(h).edge_prov); })
@@ -732,11 +763,13 @@ NB_MODULE(_core, m)
         "make_mesh", &py_make_mesh, "a"_a.none(), "name_a"_a.none(), "opcode"_a, "b"_a.none(),
         "name_b"_a.none(), "edges"_a.none(), "points"_a.none(), "verbose"_a, "logging"_a,
         "triangulate"_a, "export_rational"_a, "fill_holes"_a, "keep_all_cells"_a, "output"_a,
-        "classifier"_a = CellClassifier::WINDING_NUMBER);
+        "classifier"_a = CellClassifier::WINDING_NUMBER, "face_provenance"_a = "groups",
+        "round_vertices"_a = false);
     m.def(
         "embed_mesh", &py_embed_mesh, "a"_a, "tet_mesh"_a, "opcode"_a, "edges"_a.none(),
         "points"_a.none(), "verbose"_a, "triangulate"_a, "export_rational"_a, "output"_a,
-        "classifier"_a = CellClassifier::WINDING_NUMBER);
+        "classifier"_a = CellClassifier::WINDING_NUMBER, "face_provenance"_a = "groups",
+        "round_vertices"_a = false);
     m.def(
         "arrange_2d", &py_arrange_2d, "points"_a, "segments"_a, "export_rational"_a, "verbose"_a);
 

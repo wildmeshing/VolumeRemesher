@@ -29,6 +29,9 @@ struct MeshOptions
     // -c winding|graphcut  how cells are classified inside/outside. GRAPH_CUT needs a build
     // with VOLUMEREMESHER_WITH_GRAPHCUT, otherwise it is an error (ip_error).
     CellClassifier classifier = CellClassifier::WINDING_NUMBER;
+    // With triangulate (no command line flags):
+    FaceProvenance face_provenance = FaceProvenance::GROUPS; // how faces on the input are reported
+    bool round_vertices = false; // coords: nearest doubles of the exact coordinates
 };
 
 // The file mesh_generator writes for these options: volume.msh, volume.tet, skin.off or
