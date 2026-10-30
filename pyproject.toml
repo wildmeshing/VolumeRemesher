@@ -44,7 +44,7 @@ wheel.py-api = "cp312"
 cmake.build-type = "Release"
 sdist.include = ["python/volume_remesher/_version.py"]
 # The sdist carries what pip needs to build the module; the models and tests live in the repository.
-sdist.exclude = ["build*", ".venv", "models", "tests", "docs", ".github", ".clang-format", "third_party/graph_cut"]
+sdist.exclude = ["build*", ".venv", "models", "tests", "docs", ".github", ".clang-format"]
 
 [tool.scikit-build.cmake.define]
 VOLUMEREMESHER_BUILD_PYTHON = "ON"

@@ -1,9 +1,10 @@
 // The historical in/out classification: a 2-label min-cut over the dual graph of the BSP cells
 // (Diazzi & Attene, "Convex polyhedral meshing for robust solid modeling", 2021). It uses the
-// GCO / maxflow libraries in third_party/graph_cut, whose licenses (research use only; GPL) are
-// not compatible with this library's LGPL, so this file is compiled only when CMake is
-// configured with -DVOLUMEREMESHER_WITH_GRAPHCUT=ON. The default classifier is the winding
-// number one in inOutPartition.cpp.
+// GCO / maxflow libraries, whose licenses (research use only; GPL) are not compatible with this
+// library's LGPL: they are not part of this repository, and this file is compiled only when
+// CMake is configured with -DVOLUMEREMESHER_WITH_GRAPHCUT=ON, which downloads them from the
+// author's site (see CMakeLists.txt). The default classifier is the winding number one in
+// inOutPartition.cpp.
 #include <algorithm>
 #include <fstream>
 #include <iostream>

@@ -118,21 +118,35 @@ endif()
 
 # --- Optional graph-cut classifier (NOT LGPL) ---------------------------------
 # The historical inside/outside classification is a min-cut over the dual graph of the cells,
-# using the GCO and maxflow libraries vendored in third_party/graph_cut. GCO's license allows
-# research use only (and cites a US patent on the algorithm); maxflow is GPL. Neither is
-# compatible with this library's LGPL, so the code is excluded from the default build, from
-# the Python wheels and from the source distribution. Turning this ON compiles it in and
-# makes `mesh_generator -c graphcut` (and the Python classifier="graphcut") available; the
-# resulting binary is then NOT distributable under the LGPL. The default classifier
-# (winding number, inOutPartition.cpp) has no such restriction.
+# using GCO 3.0 (O. Veksler, A. Delong) and the maxflow library (Y. Boykov, V. Kolmogorov) it
+# bundles. GCO's license allows research use only (and cites a US patent on the algorithm) and
+# reserves redistribution to its author; maxflow is GPL. Neither is compatible with this
+# library's LGPL, so this repository does not contain that code: when this option is ON the
+# archive is downloaded from the author's site at configure time (pinned by hash, one fix
+# applied by cmake/patch_gco.cmake), compiled into the library, and `mesh_generator -c
+# graphcut` (Python classifier="graphcut") becomes available. The resulting binary is then NOT
+# distributable under the LGPL, and by downloading the archive you accept GCO's terms
+# (GCO_README.TXT in it). The default classifier (winding number, inOutPartition.cpp) has no
+# such restriction, and the Python wheels and sdist are built without this option.
 option(VOLUMEREMESHER_WITH_GRAPHCUT
-	"Compile the graph-cut cell classifier (third_party/graph_cut: research-only/GPL code)" OFF)
+	"Download and compile the graph-cut cell classifier (GCO/maxflow: research-only/GPL code)" OFF)
 if(VOLUMEREMESHER_WITH_GRAPHCUT)
-	message(WARNING "VOLUMEREMESHER_WITH_GRAPHCUT is ON: the build includes third_party/graph_cut, "
-		"whose license (GCO: research use only; maxflow: GPL) is not compatible with the LGPL. "
-		"Do not redistribute this binary under the LGPL.")
+	message(WARNING "VOLUMEREMESHER_WITH_GRAPHCUT is ON: GCO 3.0 and maxflow are downloaded and "
+		"compiled in; their licenses (GCO: research use only; maxflow: GPL) are not compatible "
+		"with the LGPL. Do not redistribute this binary under the LGPL.")
+	include(FetchContent)
+	FetchContent_Declare(gco
+		URL https://vision.cs.uwaterloo.ca/files/gco-v3.0.zip
+		URL_HASH SHA256=7562be2fa7ef19404a24a29d15414b949bdcab785370479ecc3a57a8f1cfb538
+		PATCH_COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patch_gco.cmake" <SOURCE_DIR>
+		SOURCE_SUBDIR do-not-configure
+	)
+	FetchContent_MakeAvailable(gco)
+	message(STATUS "GCO is available in " ${gco_SOURCE_DIR})
 	target_sources(${PROJECT_NAME}_lib PRIVATE src/VolumeRemesher/inOutPartition_graphcut.cpp)
-	target_include_directories(${PROJECT_NAME}_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/graph_cut)
+	target_include_directories(${PROJECT_NAME}_lib PRIVATE ${gco_SOURCE_DIR})
+	# The cell costs and face areas are doubles; GCO defaults to integer energies.
+	target_compile_definitions(${PROJECT_NAME}_lib PRIVATE GCO_ENERGYTYPE=double GCO_ENERGYTERMTYPE=double)
 	target_compile_definitions(${PROJECT_NAME}_lib PUBLIC VOLUMEREMESHER_HAVE_GRAPHCUT)
 endif()
 

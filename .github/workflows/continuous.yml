@@ -69,7 +69,7 @@ jobs:
   # Linux, with the legacy graph-cut classifier compiled in
   ####################
 
-  # Not LGPL-distributable (third_party/graph_cut), so never shipped; this job keeps the
+  # Not LGPL-distributable (GCO/maxflow, downloaded at configure time), so never shipped; this job keeps the
   # legacy path verified against its own hash manifest and checks that both classifiers agree
   # on closed inputs (winding_number_tests) for as long as it is kept.
   Graphcut:

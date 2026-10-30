@@ -5,7 +5,7 @@
 //    on the BSP itself and, for inputs where that is undefined (open or inconsistently oriented
 //    surfaces), the generalized winding number. Only this file and winding_number.cpp, LGPL.
 //  - CellClassifier::GRAPH_CUT: the historical min-cut over the dual graph of the cells
-//    (inOutPartition_graphcut.cpp). It depends on third_party/graph_cut, whose license is NOT
+//    (inOutPartition_graphcut.cpp). It depends on GCO/maxflow, downloaded on request, whose license is NOT
 //    LGPL compatible (GCO: research use only; maxflow: GPL), so it is compiled only with
 //    -DVOLUMEREMESHER_WITH_GRAPHCUT=ON.
 #include <algorithm>
