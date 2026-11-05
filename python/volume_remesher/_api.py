@@ -140,9 +140,9 @@ def _classifier(classifier: str):
 def has_graphcut() -> bool:
     """Whether ``classifier="graphcut"`` is available in this build.
 
-    The legacy min-cut classifier depends on third-party code (GCO, maxflow) whose license is
-    not LGPL compatible, so it is compiled only when the module is built from source with
-    ``-DVOLUMEREMESHER_WITH_GRAPHCUT=ON``; the wheels on PyPI do not include it.
+    Always ``True`` since 1.2, wheels included: the min-cut now uses an LGPL max-flow (vendored
+    from VolumeMesher). Up to 1.1 it depended on GCO/maxflow, whose licenses are not LGPL
+    compatible, and was only in modules built from source with ``VOLUMEREMESHER_WITH_GRAPHCUT``.
     """
     return bool(_core.has_graphcut())
 
@@ -534,10 +534,9 @@ def remesh(
         output: ``"volume"`` (default), ``"skin"`` (``-s``) or ``"black_faces"`` (``-b``).
         classifier: ``-c``. How cells are decided inside or outside: ``"winding"`` (default),
             the winding number of the surface, exact for a closed and consistently oriented
-            input and the generalized winding number otherwise; or ``"graphcut"``, the legacy
-            area-weighted min-cut, available only when the module was built with
-            ``VOLUMEREMESHER_WITH_GRAPHCUT`` (see :func:`has_graphcut`; the PyPI wheels were
-            not, its third-party code is not LGPL compatible).
+            input and the generalized winding number otherwise; or ``"graphcut"``, the
+            area-weighted min-cut the tool used before (same solid on closed, consistently
+            oriented input; a heuristic closure on open or inconsistently oriented input).
         verbose: ``-v``. Progress on the C stdout.
         log: ``-l``. Append a timing line to ``mesh_generator.log`` in the working directory.
         name: how the input is called in the log; defaults to its path, or ``"<array>"``.

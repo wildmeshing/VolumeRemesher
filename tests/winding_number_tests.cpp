@@ -5,8 +5,8 @@
 //     platforms, so they must also be correct);
 //   - the fast winding number is within its published accuracy of the exact sum, and the exact
 //     sum is the winding number (1 inside a closed surface, 0 outside);
-//   - with the graph-cut classifier compiled in as well, both classifiers label the cells of the
-//     closed, consistently oriented models identically.
+//   - the winding and graph-cut classifiers label the cells of the closed, consistently oriented
+//     models identically.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -151,7 +151,6 @@ TEST_CASE("the fast winding number is deterministic", "[winding]")
     }
 }
 
-#ifdef VOLUMEREMESHER_HAVE_GRAPHCUT
 namespace {
 std::vector<uint32_t> cell_places(const char* name, CellClassifier classifier)
 {
@@ -207,4 +206,3 @@ TEST_CASE(
         CHECK(diff == 0);
     }
 }
-#endif

@@ -23,8 +23,6 @@ cmake ..
 ```
 This produces a build configuration for your system (a `mesh_generator.sln` on Windows/MSVC, a `Makefile` on Linux/macOS). Build the `mesh_generator` target as usual. The integration tests are built by default (`VOLUMEREMESHER_BUILD_TESTS=ON`) — run them with `ctest`, or configure with `-DVOLUMEREMESHER_BUILD_TESTS=OFF` to skip them. (Some heavy tracking tests only run in a Release build.)
 
-The legacy graph-cut cell classifier (`-c graphcut`, see [Inside/outside classification](#insideoutside-classification)) is not built by default because its third-party code is not LGPL compatible; `-DVOLUMEREMESHER_WITH_GRAPHCUT=ON` compiles it in, and `ctest` then also runs the suite against it.
-
 ## Python
 
 ### Installation
@@ -170,7 +168,7 @@ The three inputs — the surface `inputfile_A.off`, the `-e` edges and the `-p` 
 | `-r` | With `-t`, also write exact **rational** vertex coordinates to `volume.tet.rational`. |
 | `-a` | Keep **all** cells: skip the inside/outside classification and tetrahedralize the whole domain. This makes the `-t` tracking **exact** (no cell is deleted, so every input primitive is realized in the output). Recommended whenever you use the tracking output. |
 | `-f` | Fill holes: cap open boundaries with ear-clipped triangles before meshing (off by default; only affects the solid-output path — `-a` needs no capping). With the caps the input is closed, so the classification uses the exact winding number. |
-| `-c winding\|graphcut` | How cells are classified inside/outside, see [below](#insideoutside-classification). Default `winding`; `graphcut` only in builds configured with `VOLUMEREMESHER_WITH_GRAPHCUT`. |
+| `-c winding\|graphcut` | How cells are classified inside/outside, see [below](#insideoutside-classification). Default `winding`. |
 | `-2d` | **2D mode**: read an OBJ line soup and write the arrangement of its segments as a triangulation. See [2D mode](#2d-mode). |
 | `-e edges.off` | Also insert these edges into the output (implies `-a`). See [input formats](#input-formats). |
 | `-p points.off` | Also insert these points into the output (implies `-a`). See [input formats](#input-formats). |
@@ -183,7 +181,7 @@ Unless `-a` is given, the cells of the arrangement are classified as inside or o
 * For a closed, consistently oriented input the winding number is computed **exactly** on the arrangement itself: it is constant on every cell, equal across a face that no input triangle covers and changing by the signed number of covering triangles across one that some do, so a walk from the outside assigns it to every cell with exact orientation predicates only. A cell is inside iff its winding number is nonzero (so a self-intersecting input is the union of what its shells enclose). Before the walk the orientation of the triangles is made consistent across manifold edges and each closed component is oriented outward, which changes nothing for a well-formed input and makes the result meaningful for one with flipped faces.
 * For an input that is open or that cannot be oriented consistently (the walk detects this) every cell takes the **generalized winding number** of the surface at a point inside it ([Jacobson et al. 2013](https://igl.ethz.ch/projects/winding-number/), evaluated with the hierarchical expansion of [Barill et al. 2018](https://www.dgp.toronto.edu/projects/fast-winding-numbers/)), and is inside iff that exceeds 1/2 in magnitude, as fTetWild filters its tetrahedra. The evaluation uses only IEEE arithmetic (with a deterministic `atan2`), so the output stays byte-identical across platforms. Capping the input first (`-f`) keeps it on the exact path.
 
-`-c graphcut` is the classifier the tool used before: an area-weighted min-cut over the dual graph of the cells. It gives the same result as the winding number on closed, consistently oriented inputs (the test suite checks this cell by cell) and a different, heuristic closure on open or inconsistently oriented ones. It depends on the GCO and maxflow libraries, whose licenses (research use only; GPL) are not compatible with this library's LGPL, so this repository does not contain them: `-DVOLUMEREMESHER_WITH_GRAPHCUT=ON` downloads GCO 3.0 from its author's site at configure time (hash-pinned, with one memory fix applied), compiles it in, and the resulting binary may be used for research but not redistributed under the LGPL. The Python wheels and sdist never include it.
+`-c graphcut` is the classifier the tool used before: an area-weighted min-cut over the dual graph of the cells. It gives the same result as the winding number on closed, consistently oriented inputs (the test suite checks this cell by cell) and a different, heuristic closure on open or inconsistently oriented ones. The min-cut is the Boykov–Kolmogorov max-flow of `src/VolumeRemesher/graphcut.h`, from [VolumeMesher](https://github.com/MarcoAttene/VolumeMesher) (LGPL); it is part of every build, the Python wheels included. (Up to version 1.1 it used GCO/maxflow, whose licenses are not LGPL compatible, and was only built with `-DVOLUMEREMESHER_WITH_GRAPHCUT=ON`; that option is now ignored. The output is the same.)
 
 ### Input formats
 
@@ -384,7 +382,7 @@ To embed a set of triangles (and, optionally, edges and points) into an existing
 
 ## License
 
-LGPL-3.0-or-later; see [LICENSE](LICENSE). The default build, the Python wheels and the source distribution contain only LGPL-compatible components. The one exception is opt-in and not in the repository: the legacy `-c graphcut` classifier (see [Inside/outside classification](#insideoutside-classification)) downloads GCO/maxflow, research-use-only and GPL code, when configured with `-DVOLUMEREMESHER_WITH_GRAPHCUT=ON`; a binary built that way must not be distributed under the LGPL.
+LGPL-3.0-or-later; see [LICENSE](LICENSE). Every build, the Python wheels and the source distribution contain only LGPL-compatible components; `src/VolumeRemesher/graphcut.h` comes from [VolumeMesher](https://github.com/MarcoAttene/VolumeMesher) (Copyright IMATI-GE / CNR, LGPL-3.0-or-later).
 
 ## Notes
 

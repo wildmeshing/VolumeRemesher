@@ -33,8 +33,7 @@
 // How the cells are classified inside/outside the input surface(s), see inOutPartition.cpp.
 //  WINDING_NUMBER -> winding number: exact on the BSP for closed, consistently oriented input, the
 //               generalized winding number otherwise. The default.
-//  GRAPH_CUT -> the historical area-weighted min-cut. Available only when the library was built
-//               with VOLUMEREMESHER_WITH_GRAPHCUT (its third-party code is not LGPL compatible).
+//  GRAPH_CUT -> the historical area-weighted min-cut over the dual graph of the cells.
 // (WINDING_NUMBER, not WINDING: <wingdi.h> defines WINDING as a macro, and the Python module
 // includes <windows.h>.)
 enum class CellClassifier : uint8_t { WINDING_NUMBER = 0, GRAPH_CUT = 1 };
@@ -487,7 +486,7 @@ public:
         CONSTR_GROUP_T group,
         uint32_t internal_label,
         bool verbose);
-    // Graph-cut classifier (inOutPartition_graphcut.cpp, only with VOLUMEREMESHER_WITH_GRAPHCUT)
+    // Graph-cut classifier (inOutPartition_graphcut.cpp)
     void partition_graphcut(bool two_files);
     void markInternalCells(
         uint32_t skin_colour,

@@ -93,10 +93,7 @@ def test_same_failure_as_mesh_generator(mesh_generator, argv, tmp_path):
 
 
 def test_graphcut_classifier_parity(mesh_generator, tmp_path):
-    """-c graphcut: the same volume.msh as the Python module when the build has the legacy
-    classifier, the same error message when it does not."""
-    import volume_remesher as vr
-
+    """-c graphcut: the same volume.msh from the command line tool and the Python module."""
     argv = [str(MODELS / "sphere.off"), "-c", "graphcut"]
     cli = tmp_path / "cli"
     py = tmp_path / "py"
@@ -104,13 +101,8 @@ def test_graphcut_classifier_parity(mesh_generator, tmp_path):
     py.mkdir()
     rc = run_tool(mesh_generator, argv, cwd=cli)
     rp = run_python_cli(argv, cwd=py)
-    if vr.has_graphcut():
-        assert rc.returncode == 0 and rp.returncode == 0, rc.stderr + rp.stderr
-        assert filecmp.cmp(cli / "volume.msh", py / "volume.msh", shallow=False)
-    else:
-        assert rc.returncode != 0 and rp.returncode != 0
-        assert "VOLUMEREMESHER_WITH_GRAPHCUT" in rc.stderr
-        assert rp.stderr.strip() == rc.stderr.strip()
+    assert rc.returncode == 0 and rp.returncode == 0, rc.stderr + rp.stderr
+    assert filecmp.cmp(cli / "volume.msh", py / "volume.msh", shallow=False)
 
 
 def test_usage_text(mesh_generator, tmp_path):

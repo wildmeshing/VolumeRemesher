@@ -3,11 +3,9 @@
 // Two classifiers:
 //  - CellClassifier::WINDING_NUMBER (the default): the winding number of each cell, computed exactly
 //    on the BSP itself and, for inputs where that is undefined (open or inconsistently oriented
-//    surfaces), the generalized winding number. Only this file and winding_number.cpp, LGPL.
-//  - CellClassifier::GRAPH_CUT: the historical min-cut over the dual graph of the cells
-//    (inOutPartition_graphcut.cpp). It depends on GCO/maxflow, downloaded on request, whose license is NOT
-//    LGPL compatible (GCO: research use only; maxflow: GPL), so it is compiled only with
-//    -DVOLUMEREMESHER_WITH_GRAPHCUT=ON.
+//    surfaces), the generalized winding number (this file and winding_number.cpp).
+//  - CellClassifier::GRAPH_CUT: the historical area-weighted min-cut over the dual graph of the
+//    cells (inOutPartition_graphcut.cpp, with the max-flow of graphcut.h).
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -466,13 +464,7 @@ void BSPcomplex::constraintsSurface_complexPartition(
     for (size_t i = 0; i < vertices.size(); i++) vrts_visit[i] = 0;
 
     if (classifier == CellClassifier::GRAPH_CUT) {
-#ifdef VOLUMEREMESHER_HAVE_GRAPHCUT
         partition_graphcut(two_files);
-#else
-        ip_error(
-            "The graph-cut classifier is not available: this build was configured without "
-            "VOLUMEREMESHER_WITH_GRAPHCUT\n");
-#endif
         return;
     }
 

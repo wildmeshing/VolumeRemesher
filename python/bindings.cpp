@@ -745,20 +745,14 @@ NB_MODULE(_core, m)
     // --- pipeline ----------------------------------------------------------------------------
     nb::enum_<CellClassifier>(m, "CellClassifier",
         "How cells are classified inside/outside: WINDING (the winding number; the default) or "
-        "GRAPH_CUT (the legacy min-cut, only in builds with VOLUMEREMESHER_WITH_GRAPHCUT).")
+        "GRAPH_CUT (the area-weighted min-cut).")
         .value("WINDING", CellClassifier::WINDING_NUMBER)
         .value("GRAPH_CUT", CellClassifier::GRAPH_CUT);
     m.def(
         "has_graphcut",
-        []() {
-#ifdef VOLUMEREMESHER_HAVE_GRAPHCUT
-            return true;
-#else
-            return false;
-#endif
-        },
-        "True when this module was built with the graph-cut classifier (not the case for the "
-        "wheels on PyPI: its third-party code is not LGPL compatible).");
+        []() { return true; },
+        "Always True since 1.2: the graph-cut classifier is part of every build (kept for code "
+        "that checks it).");
     m.def(
         "make_mesh", &py_make_mesh, "a"_a.none(), "name_a"_a.none(), "opcode"_a, "b"_a.none(),
         "name_b"_a.none(), "edges"_a.none(), "points"_a.none(), "verbose"_a, "logging"_a,
