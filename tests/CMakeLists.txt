@@ -55,29 +55,35 @@ list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
 include(Catch)
 catch_discover_tests(integration_tests)
 
-# The same suite against the legacy graph-cut classifier (`-c graphcut`), checked against the
-# manifest the suite used before the winding-number classifier became the default. Only when
-# that classifier is compiled in; keeps the legacy path verified for as long as it is kept.
-if(VOLUMEREMESHER_WITH_GRAPHCUT)
-    add_executable(integration_tests_graphcut integration_tests.cpp sha256.h)
-    target_link_libraries(integration_tests_graphcut PRIVATE Catch2::Catch2WithMain)
-    target_compile_features(integration_tests_graphcut PRIVATE cxx_std_20)
-    add_dependencies(integration_tests_graphcut mesh_generator verify_tracking verify_tracking_2d)
-    target_compile_definitions(integration_tests_graphcut PRIVATE
-        VRTEST_MESH_GENERATOR="$<TARGET_FILE:mesh_generator>"
-        VRTEST_VERIFY_TRACKING="$<TARGET_FILE:verify_tracking>"
-        VRTEST_VERIFY_TRACKING_2D="$<TARGET_FILE:verify_tracking_2d>"
-        VRTEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/models"
-        VRTEST_HASHES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/reference_hashes.graphcut.txt"
-        VRTEST_EXTRA_FLAGS="-c graphcut"
-    )
-    catch_discover_tests(integration_tests_graphcut TEST_PREFIX "graphcut: ")
-endif()
+# The same suite against the graph-cut classifier (`-c graphcut`), checked against the manifest
+# the suite used before the winding-number classifier became the default. The max-flow changed
+# from GCO/maxflow to graphcut.h since; the hashes did not.
+add_executable(integration_tests_graphcut integration_tests.cpp sha256.h)
+target_link_libraries(integration_tests_graphcut PRIVATE Catch2::Catch2WithMain)
+target_compile_features(integration_tests_graphcut PRIVATE cxx_std_20)
+add_dependencies(integration_tests_graphcut mesh_generator verify_tracking verify_tracking_2d)
+target_compile_definitions(integration_tests_graphcut PRIVATE
+    VRTEST_MESH_GENERATOR="$<TARGET_FILE:mesh_generator>"
+    VRTEST_VERIFY_TRACKING="$<TARGET_FILE:verify_tracking>"
+    VRTEST_VERIFY_TRACKING_2D="$<TARGET_FILE:verify_tracking_2d>"
+    VRTEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/models"
+    VRTEST_HASHES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/reference_hashes.graphcut.txt"
+    VRTEST_EXTRA_FLAGS="-c graphcut"
+)
+catch_discover_tests(integration_tests_graphcut TEST_PREFIX "graphcut: ")
+
+# The max-flow behind the graph-cut classifier (src/VolumeRemesher/graphcut.h) against an
+# exhaustive search for the minimum cut on small random graphs. Header only: no library.
+add_executable(graphcut_tests graphcut_tests.cpp)
+target_link_libraries(graphcut_tests PRIVATE Catch2::Catch2WithMain)
+target_include_directories(graphcut_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(graphcut_tests PRIVATE cxx_std_20)
+catch_discover_tests(graphcut_tests)
 
 # The winding-number machinery behind the default cell classifier (winding_number_tests.cpp):
 # the deterministic atan2 against the system one, the fast winding number against the exact
-# sum, and -- when the graph-cut classifier is compiled in too -- the two classifiers against
-# each other on the closed, consistently oriented models, where they must agree cell by cell.
+# sum, and the winding and graph-cut classifiers against each other on the closed, consistently
+# oriented models, where they must agree cell by cell.
 add_executable(winding_number_tests winding_number_tests.cpp)
 target_link_libraries(winding_number_tests PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
 target_compile_features(winding_number_tests PRIVATE cxx_std_20)

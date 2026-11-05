@@ -32,7 +32,7 @@
 
 namespace fs = std::filesystem;
 
-// Flags appended to every mesh_generator run (e.g. "-c graphcut" for the legacy-classifier
+// Flags appended to every mesh_generator run (e.g. "-c graphcut" for the graph-cut classifier
 // variant of this suite, see tests/CMakeLists.txt). Empty by default.
 #ifndef VRTEST_EXTRA_FLAGS
 #define VRTEST_EXTRA_FLAGS ""

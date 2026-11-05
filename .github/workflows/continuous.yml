@@ -66,48 +66,6 @@ jobs:
 
 
   ####################
-  # Linux, with the legacy graph-cut classifier compiled in
-  ####################
-
-  # Not LGPL-distributable (GCO/maxflow, downloaded at configure time), so never shipped; this job keeps the
-  # legacy path verified against its own hash manifest and checks that both classifiers agree
-  # on closed inputs (winding_number_tests) for as long as it is kept.
-  Graphcut:
-    name: Linux graph-cut classifier (Release)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v1
-        with:
-          fetch-depth: 10
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Python build and test dependencies
-        run: python -m pip install nanobind numpy pytest
-
-      - name: Configure
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DVOLUMEREMESHER_WITH_GRAPHCUT=ON \
-            -DVOLUMEREMESHER_BUILD_PYTHON=ON \
-            -DPython_EXECUTABLE=$(which python)
-
-      - name: Build
-        run: cd build; make -j2
-
-      - name: Tests (both classifiers)
-        run: cd build && ctest --output-on-failure
-
-      - name: Python tests
-        run: VRTEST_BUILD_DIR=build PYTHONPATH=python python -m pytest tests/python -q -k "classifier or graphcut"
-
-  ####################
   # MacOS
   ####################
 

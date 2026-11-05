@@ -26,8 +26,7 @@ struct MeshOptions
     bool fill_holes = false; // -f  cap open boundaries (solid-output path only)
     bool keep_all_cells = false; // -a  skip the in/out classification, keep the whole domain
     MeshOutput::Kind output = MeshOutput::VOLUME; // default / -s (SKIN) / -b (BLACK_FACES)
-    // -c winding|graphcut  how cells are classified inside/outside. GRAPH_CUT needs a build
-    // with VOLUMEREMESHER_WITH_GRAPHCUT, otherwise it is an error (ip_error).
+    // -c winding|graphcut  how cells are classified inside/outside.
     CellClassifier classifier = CellClassifier::WINDING_NUMBER;
     // With triangulate (no command line flags):
     FaceProvenance face_provenance = FaceProvenance::GROUPS; // how faces on the input are reported

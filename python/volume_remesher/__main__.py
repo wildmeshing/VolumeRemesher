@@ -37,8 +37,7 @@ Command line arguments:
      with 'np 0 0' then vertex lines
 -c winding|graphcut = how cells are classified inside/outside (default
      winding: exact winding number, generalized winding number for open or
-     inconsistently oriented input; graphcut: the area-weighted min-cut, only
-     in builds configured with VOLUMEREMESHER_WITH_GRAPHCUT)
+     inconsistently oriented input; graphcut: the area-weighted min-cut)
 bool_opcode: {U, I, D}
   U -> union (AuB),
   I -> intersection (A^B),
