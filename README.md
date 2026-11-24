@@ -206,7 +206,7 @@ Unless `-a` is given, the cells of the arrangement are classified as inside or o
 
 ## Inserting edges and points
 
-Edges and points are forced into the tetrahedralization so they appear as genuine tet **edges** and **vertices** of the output. Internally, each input edge `AB` is pinned by two small triangles sharing `AB`, and each input point `P` by three small triangles meeting at `P`; these helper triangles are excluded from the surface tracking. Insertion implies `-a` (keep all cells), because the pinned edges/points do not bound a solid and would otherwise be discarded by the inside/outside classification.
+Edges and points are forced into the tetrahedralization so they appear as genuine tet **edges** and **vertices** of the output. Internally, each input point `P` is a vertex of the tetrahedralization, which makes it one of the output; each input edge `AB` is pinned by up to two small triangles sharing `AB` (none if `AB` is an edge of the surface that the arrangement has anyway, one inside a flat region of the surface); these helper triangles are excluded from the surface tracking. When points are the whole input, each still gets three small triangles meeting at `P`, as the arrangement needs a constraint. Insertion implies `-a` (keep all cells), because the pinned edges/points do not bound a solid and would otherwise be discarded by the inside/outside classification.
 
 ```
 # a surface plus extra edges and points, with exact tracking

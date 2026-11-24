@@ -793,6 +793,8 @@ BSPcomplex::BSPcomplex(
     // filled (num_input_triangles unset) every real constraint is input surface.
     num_edge_triangles = _constraints->num_edge_triangles;
     num_point_triangles = _constraints->num_point_triangles;
+    feature_edge_vertices = _constraints->feature_edge_vertices;
+    feature_point_vertices = _constraints->feature_point_vertices;
     first_point_constraint = first_virtual_constraint - num_point_triangles;
     first_edge_constraint = first_point_constraint - num_edge_triangles;
     first_fake_constraint = (_constraints->num_input_triangles == UINT32_MAX)
@@ -3163,8 +3165,8 @@ void BSPcomplex::trackEdgePointProvenance()
 {
     edge_provenance.clear();
     point_provenance.clear();
-    const uint32_t n_edges = num_edge_triangles / 2;
-    const uint32_t n_points = num_point_triangles / 3;
+    const uint32_t n_edges = uint32_t(feature_edge_vertices.size() / 2);
+    const uint32_t n_points = uint32_t(feature_point_vertices.size());
     if (n_edges == 0 && n_points == 0) return;
 
     // Which vertices are used by the output tets, and, for each output tet edge, one tet
@@ -3185,8 +3187,7 @@ void BSPcomplex::trackEdgePointProvenance()
         }
     }
 
-    // Each inserted edge is pinned by its two forcing triangles (A,B,*): A and B are the
-    // first two vertices of the constraint at first_edge_constraint + 2*e. The output tet
+    // Inserted edge e is AB, A and B at feature_edge_vertices[2e], [2e+1]. The output tet
     // edges on segment AB are the consecutive pairs of the output vertices lying on AB.
     //
     // Testing every output vertex against every edge is O(n_edges * n_vertices) and far too
@@ -3230,8 +3231,7 @@ void BSPcomplex::trackEdgePointProvenance()
         uint32_t cur = 0;
         std::vector<uint32_t> cand;
         for (uint32_t e = 0; e < n_edges; e++) {
-            const uint32_t c = first_edge_constraint + 2 * e;
-            const uint32_t ia = constraints_vrts[3 * c], ib = constraints_vrts[3 * c + 1];
+            const uint32_t ia = feature_edge_vertices[2 * e], ib = feature_edge_vertices[2 * e + 1];
             double A[3], B[3];
             vertices[ia]->getApproxXYZCoordinates(A[0], A[1], A[2]);
             vertices[ib]->getApproxXYZCoordinates(B[0], B[1], B[2]);
@@ -3279,12 +3279,10 @@ void BSPcomplex::trackEdgePointProvenance()
         }
     }
 
-    // Each inserted point is pinned by its three corner triangles (P,*,*): P is the first
-    // vertex of the constraint at first_point_constraint + 3*p. Report the output vertex
-    // equal to it (P itself if it survived, else any coincident used vertex).
+    // Inserted point p is vertex feature_point_vertices[p]. Report the output vertex equal to
+    // it (P itself if it survived, else any coincident used vertex).
     for (uint32_t p = 0; p < n_points; p++) {
-        const uint32_t c = first_point_constraint + 3 * p;
-        const uint32_t ip = constraints_vrts[3 * c];
+        const uint32_t ip = feature_point_vertices[p];
         uint32_t out = UINT32_MAX;
         if (used[ip])
             out = ip;

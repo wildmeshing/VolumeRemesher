@@ -935,12 +935,18 @@ BSPcomplex* remakePolyhedralMesh(
         }
         mesh->insertExistingVertexNonDelaunay(vi, tet);
     }
-    if (any_existing_copy)
+    if (any_existing_copy) {
         for (uint32_t i = 0; i < constraints->num_triangles * 3; i++) {
             const uint32_t v = constraints->tri_vertices[i];
             if (v >= orig_numv && existing_copy[v - orig_numv] != UINT32_MAX)
                 constraints->tri_vertices[i] = existing_copy[v - orig_numv];
         }
+        // The features too: an edge or point with no forcing triangle is known only from these.
+        for (auto* fv : {&constraints->feature_edge_vertices, &constraints->feature_point_vertices})
+            for (uint32_t& v : *fv)
+                if (v >= orig_numv && existing_copy[v - orig_numv] != UINT32_MAX)
+                    v = existing_copy[v - orig_numv];
+    }
 
     clock_t time0 = clock();
     clock_t time2 = time0;

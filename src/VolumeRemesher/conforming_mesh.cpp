@@ -3874,9 +3874,65 @@ void insert_edges_and_points(
             extra.edge_verts[3 * i],
             extra.edge_verts[3 * i + 1],
             extra.edge_verts[3 * i + 2]);
+    // A feature edge that is already an edge of the constraints (the surface, hole caps) may be
+    // in the arrangement without any forcing triangle:
+    //  - an edge of exactly one constraint gets a virtual constraint through it
+    //    (place_virtual_constraints), and an edge of two constraints that are not coplanar is
+    //    where their planes cross: either way the arrangement has it, and forcing triangles
+    //    would only add cuts. Those cuts are what made such features costly: where the surface
+    //    is axis-aligned up to rounding, an axis-aligned forcing triangle through its edge is
+    //    a hair off the surface's plane, and the two cross along an ill-conditioned line, which
+    //    leaves facets 1e-17 wide (zero area once rounded) along every feature edge;
+    //  - an edge whose constraints are all coplanar (inside a flat region of the surface) is in
+    //    no plane but theirs, and gets no virtual constraint unless they all lie on one side of
+    //    it, so it may not be in the arrangement at all. One forcing triangle across that plane
+    //    pins it, the plane being the other one. Its apex is along the axis of the plane's
+    //    largest normal component, so it crosses the plane at 35 degrees or more (90 on an
+    //    axis-aligned plane), and the triangles of a straight run of such edges, all along one
+    //    axis, are in one plane.
+    // Every other edge gets the two triangles below. The ids are those of the constraints as
+    // they are now, the same as ia / ib below: add_vertex maps a feature vertex onto the
+    // existing vertex it coincides with.
+    std::unordered_map<uint64_t, std::vector<uint32_t>> constraint_edges;
+    if (n_edges > 0)
+        for (uint32_t t = 0; t < base_t; t++)
+            for (int k = 0; k < 3; k++) {
+                uint32_t a = constraints->tri_vertices[3 * t + k];
+                uint32_t b = constraints->tri_vertices[3 * t + (k + 1) % 3];
+                if (a > b) std::swap(a, b);
+                constraint_edges[(uint64_t(a) << 32) | b].push_back(t);
+            }
+    constraints->feature_edge_vertices.assign(2 * n_edges, 0);
+    constraints->feature_point_vertices.assign(n_points, 0);
+    uint32_t n_edge_tris = 0, n_point_tris = 0, n_pinned_edges = 0, n_flat_edges = 0;
     for (uint32_t e = 0; e < n_edges; e++) {
         const uint32_t ia = ev_idx[extra.edge_idx[2 * e]];
         const uint32_t ib = ev_idx[extra.edge_idx[2 * e + 1]];
+        constraints->feature_edge_vertices[2 * e] = ia;
+        constraints->feature_edge_vertices[2 * e + 1] = ib;
+        uint32_t flat_tri = UINT32_MAX; // set when every constraint on AB is in one plane
+        {
+            const auto it =
+                constraint_edges.find((uint64_t(std::min(ia, ib)) << 32) | std::max(ia, ib));
+            if (it != constraint_edges.end()) {
+                const std::vector<uint32_t>& ts = it->second;
+                const uint32_t* t0 = &constraints->tri_vertices[3 * ts[0]];
+                bool pinned = ts.size() == 1;
+                for (size_t j = 1; j < ts.size() && !pinned; j++)
+                    for (int k = 0; k < 3 && !pinned; k++)
+                        pinned = vrt_signe_orient3d(
+                                     constraints->tri_vertices[3 * ts[j] + k],
+                                     t0[0],
+                                     t0[1],
+                                     t0[2],
+                                     mesh) != 0;
+                if (pinned) {
+                    n_pinned_edges++;
+                    continue;
+                }
+                flat_tri = ts[0];
+            }
+        }
         const pointType A = mesh->vertices[ia];
         const pointType B = mesh->vertices[ib];
         const double a[3] = {A.X(), A.Y(), A.Z()};
@@ -3900,6 +3956,43 @@ void insert_edges_and_points(
         if (have_tets) {
             ta = base_tet(ia, a, "an edge endpoint");
             base_tet(ib, b, "an edge endpoint");
+        }
+        if (flat_tri != UINT32_MAX) {
+            const uint32_t* t = &constraints->tri_vertices[3 * flat_tri];
+            const pointType& P0 = mesh->vertices[t[0]];
+            const pointType& P1 = mesh->vertices[t[1]];
+            const pointType& P2 = mesh->vertices[t[2]];
+            const int k = genericPoint::maxComponentInTriangleNormal(
+                P0.X(),
+                P0.Y(),
+                P0.Z(),
+                P1.X(),
+                P1.Y(),
+                P1.Z(),
+                P2.X(),
+                P2.Y(),
+                P2.Z());
+            const double Le = L * DISP_FACTOR;
+            double q[3];
+            bool found = axis_corner(a, k, Le, q) &&
+                         pointType::orient3D(pointType(q[0], q[1], q[2]), P0, P1, P2) != 0;
+            if (!found) {
+                // As for two triangles below: a corner inside a tet that holds A, off the plane.
+                double g[4][3];
+                tet_corners(a, ta, Le, g);
+                for (int j = 0; j < 4 && !found; j++)
+                    if (pointType::orient3D(pointType(g[j][0], g[j][1], g[j][2]), P0, P1, P2) !=
+                        0) {
+                        std::copy(g[j], g[j] + 3, q);
+                        found = true;
+                    }
+            }
+            if (!found) // cannot happen: g_0..g_3 span a tet, so they are not all in one plane
+                ip_error("insert_edges_and_points: no forcing-triangle corner off a flat edge\n");
+            add_tri(ia, ib, add_vertex(q[0], q[1], q[2]));
+            n_edge_tris += 1;
+            n_flat_edges++;
+            continue;
         }
         const double adx = std::fabs(dx), ady = std::fabs(dy), adz = std::fabs(dz);
         int drop = 0;
@@ -3936,18 +4029,26 @@ void insert_edges_and_points(
                 ip_error("insert_edges_and_points: no forcing-triangle corners for an edge\n");
         }
         for (int s = 0; s < 2; s++) add_tri(ia, ib, add_vertex(q[s][0], q[s][1], q[s][2]));
+        n_edge_tris += 2;
     }
 
-    // Point-forcing triangles: the three faces of the axis-aligned corner at P. Their
-    // planes are x=Px, y=Py, z=Pz, so they meet exactly at P, pinning it as a vertex. (When
-    // the corners come from a tet instead, the three triangles are chosen not coplanar, so
-    // they still meet only at P.)
+    // A forced point needs no forcing triangles: it is appended to the mesh and inserted into
+    // the tetrahedralization like every other vertex (or it coincides with a vertex there), so
+    // it is a vertex of the arrangement. It used to get the three faces of the axis-aligned
+    // corner at P, whose planes x=Px, y=Py, z=Pz meet exactly at P; near a surface that is
+    // axis-aligned up to rounding one of them is a hair off the surface's plane, which leaves
+    // facets 1e-17 wide there. The corner is kept only when nothing else is a constraint
+    // (points alone), as the arrangement needs one. (When its corners come from a tet instead,
+    // the three triangles are chosen not coplanar, so they still meet only at P.)
+    const bool force_points = (base_t == 0 && n_edge_tris == 0);
     for (uint32_t p = 0; p < n_points; p++) {
         const double pp[3] = {
             extra.point_verts[3 * p], extra.point_verts[3 * p + 1], extra.point_verts[3 * p + 2]};
         const uint32_t ip = add_vertex(pp[0], pp[1], pp[2]);
+        constraints->feature_point_vertices[p] = ip;
         uint64_t tp = 0;
         if (have_tets) tp = base_tet(ip, pp, "a forced point");
+        if (!force_points) continue;
         double q[3][3];
         bool axes_fit = true;
         for (int k = 0; k < 3 && axes_fit; k++) axes_fit = axis_corner(pp, k, point_disp, q[k]);
@@ -3979,19 +4080,26 @@ void insert_edges_and_points(
         add_tri(ip, iax, iay);
         add_tri(ip, iay, iaz);
         add_tri(ip, iaz, iax);
+        n_point_tris += 3;
     }
 
     constraints->num_triangles = ti;
-    constraints->num_edge_triangles = 2 * n_edges;
-    constraints->num_point_triangles = 3 * n_points;
+    constraints->num_edge_triangles = n_edge_tris;
+    constraints->num_point_triangles = n_point_tris;
+    if (verbose)
+        printf(
+            "\tForced edges: %u already in the arrangement, %u in a flat region (one triangle "
+            "each)\n",
+            n_pinned_edges,
+            n_flat_edges);
 
     if (verbose)
         printf(
             "\tInserted %u edge (%u tris) and %u point (%u tris) features\n",
             n_edges,
-            2 * n_edges,
+            n_edge_tris,
             n_points,
-            3 * n_points);
+            n_point_tris);
 }
 
 

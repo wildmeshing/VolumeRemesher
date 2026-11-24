@@ -6,11 +6,17 @@
 //    less than a point's forcing displacement on small inputs;
 //  - at a boundary vertex of the background whose inward cone holds no axis direction (the apex
 //    of a rotated tet), so the corners have to come from the tet itself;
-//  - at the position of a background vertex that no tet references.
+//  - at the position of a background vertex that no tet references;
+//  - on the surface: along its creases and at its vertices they add nothing to the embedding
+//    (forcing triangles there made facets 1e-17 wide where the surface is axis-aligned up to
+//    rounding), and an edge inside a flat region is still tiled.
+// Points take forcing corners only when they are the whole input, so the cases about corners
+// embed each point both with the surface and alone.
 // The grid background is tetwild's at a small scale: lines through the cube's corners, with a
 // padding of 0.2 against a point displacement of 0.1 x the mean surface edge (0.228).
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "feature_vertex_fixtures.h"
 
@@ -149,6 +155,21 @@ void check_edge(const Result& r, const double* a, const double* b)
     CHECK(tiles_segment(r, r.edge_provenance[0], a, b));
 }
 
+// The same vertices, exactly, and the same tets.
+bool same_embedding(const Result& a, const Result& b)
+{
+    if (a.coords.size() != b.coords.size() || a.tets != b.tets) return false;
+    for (size_t i = 0; i < a.coords.size(); i++)
+        if (!(a.coords[i] == b.coords[i])) return false;
+    return true;
+}
+
+// The cube's edges, as indexes into cube_coords(): its 12 edges (creases) and the diagonals its 6
+// faces are split along.
+const std::vector<uint32_t> cube_creases = {0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6,
+                                            6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7};
+const std::vector<uint32_t> cube_diagonals = {0, 2, 4, 6, 0, 5, 2, 7, 1, 6, 0, 7};
+
 // A single tet with its apex at the origin and the other corners around the (1,1,1) direction,
 // (4,4,6), (4,6,4), (6,4,4): the inward cone at the apex holds none of +-x, +-y, +-z, so a
 // feature at the apex can take no axis-aligned forcing corner. A point is strictly inside the
@@ -188,8 +209,15 @@ TEST_CASE(
 TEST_CASE("a forced point whose forcing corners would leave the background", "[feature_vertex]")
 {
     const double p[3] = {2, 2, 2};
-    const Result r =
-        embed(grid_background(), cube_coords(), {}, {}, std::vector<double>(p, p + 3));
+    const bool alone = GENERATE(false, true);
+    CAPTURE(alone);
+    const Result r = embed(
+        grid_background(),
+        alone ? std::vector<double>{} : cube_coords(),
+        {},
+        {},
+        std::vector<double>(p, p + 3),
+        alone ? std::vector<uint32_t>{} : cube_tris);
     check_point(r, p);
     CHECK(vertices_outside_box(r, -0.2, 2.2) == 0);
 }
@@ -214,7 +242,15 @@ TEST_CASE(
     const double tet[12] = {-1, -1, -1, 9, -1, -1, -1, 9, -1, -1, -1, 9};
     const Background bg{std::vector<double>(tet, tet + 12), {0, 1, 2, 3}};
     const double p[3] = {2, 2, 2.9};
-    const Result r = embed(bg, cube_coords(), {}, {}, std::vector<double>(p, p + 3));
+    const bool alone = GENERATE(false, true);
+    CAPTURE(alone);
+    const Result r = embed(
+        bg,
+        alone ? std::vector<double>{} : cube_coords(),
+        {},
+        {},
+        std::vector<double>(p, p + 3),
+        alone ? std::vector<uint32_t>{} : cube_tris);
     check_point(r, p);
     CHECK(vertices_outside_tet(r, tet) == 0);
 }
@@ -224,8 +260,15 @@ TEST_CASE(
 TEST_CASE("a forced point at a boundary vertex with no inward axis direction", "[feature_vertex]")
 {
     const double p[3] = {0, 0, 0};
+    const bool alone = GENERATE(false, true);
+    CAPTURE(alone);
     const Result r = embed(
-        rotated_tet_background(), cube_coords(1.3, 1.5), {}, {}, std::vector<double>(p, p + 3));
+        rotated_tet_background(),
+        alone ? std::vector<double>{} : cube_coords(1.3, 1.5),
+        {},
+        {},
+        std::vector<double>(p, p + 3),
+        alone ? std::vector<uint32_t>{} : cube_tris);
     check_point(r, p);
     CHECK(vertices_outside_tet(r, rotated_tet) == 0);
 }
@@ -251,4 +294,68 @@ TEST_CASE(
     const Result r = embed(bg, cube_coords(), {}, {}, std::vector<double>(p, p + 3));
     check_point(r, p);
     CHECK(vertices_outside_box(r, -0.2, 2.2) == 0);
+}
+
+// The cube's creases as forced edges and its corners as forced points: all already in the
+// arrangement, so the embedding is the surface's alone. Forcing triangles there used to add cuts
+// along every feature, and on a cube whose faces are axis-aligned only up to rounding the
+// axis-aligned forcing triangles were a hair off the faces' planes, leaving facets 1e-17 wide.
+// On that cube every face diagonal is a crease too (its two triangles are not coplanar).
+TEST_CASE("forced edges and points on the surface's creases add nothing", "[feature_vertex]")
+{
+    const bool perturbed = GENERATE(false, true);
+    CAPTURE(perturbed);
+    std::vector<double> c = cube_coords();
+    if (perturbed) {
+        // Each coordinate up to 3 x 2^-50 off (a few ulps of 2), in a fixed pattern that leaves no
+        // four corners of a face coplanar.
+        for (size_t i = 0; i < c.size(); i++) c[i] += double(int((5 * i + 1) % 7) - 3) * 0x1p-50;
+        for (size_t f = 0; f < 6; f++) { // the second triangle's apex is off the first's plane
+            const uint32_t* t = &cube_tris[6 * f];
+            uint32_t apex = t[3];
+            for (int k = 3; k < 6; k++)
+                if (t[k] != t[0] && t[k] != t[1] && t[k] != t[2]) apex = t[k];
+            REQUIRE(
+                orient(at(&c[3 * t[0]]), at(&c[3 * t[1]]), at(&c[3 * t[2]]), at(&c[3 * apex])) !=
+                0);
+        }
+    }
+    std::vector<uint32_t> edges = cube_creases;
+    if (perturbed) edges.insert(edges.end(), cube_diagonals.begin(), cube_diagonals.end());
+    const Background bg = box_background(-0.5, 2.5);
+    const Result surface = embed(bg, c, {}, {}, {});
+    const Result features = embed(bg, c, c, edges, c);
+    REQUIRE(features.edge_provenance.size() == edges.size() / 2);
+    for (size_t e = 0; e < edges.size() / 2; e++) {
+        CAPTURE(e);
+        CHECK(tiles_segment(
+            features,
+            features.edge_provenance[e],
+            &c[3 * edges[2 * e]],
+            &c[3 * edges[2 * e + 1]]));
+    }
+    REQUIRE(features.point_provenance.size() == 8);
+    for (uint32_t v = 0; v < 8; v++)
+        CHECK(vertex_at(features, features.point_provenance[v][1], &c[3 * v]));
+    CHECK(same_embedding(surface, features));
+}
+
+// The diagonal a face is split along is inside a flat region: both its triangles are in the
+// face's plane, so it is in no other plane and, with a triangle on either side, gets no virtual
+// constraint. Unless the background happens to have it as an edge (not this one: the box's tets
+// do not reach the cube), a forced edge there needs a forcing triangle to be in the output.
+TEST_CASE("a forced edge inside a flat region of the surface is tiled", "[feature_vertex]")
+{
+    const std::vector<double> c = cube_coords();
+    const Result r = embed(box_background(-0.5, 2.5), c, c, cube_diagonals, {});
+    REQUIRE(!r.tets.empty());
+    REQUIRE(r.edge_provenance.size() == cube_diagonals.size() / 2);
+    for (size_t e = 0; e < cube_diagonals.size() / 2; e++) {
+        CAPTURE(e);
+        CHECK(tiles_segment(
+            r,
+            r.edge_provenance[e],
+            &c[3 * cube_diagonals[2 * e]],
+            &c[3 * cube_diagonals[2 * e + 1]]));
+    }
 }

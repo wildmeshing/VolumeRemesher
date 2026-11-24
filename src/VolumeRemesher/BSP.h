@@ -224,16 +224,20 @@ public:
     // Constraint layout (all indices are into constraints_vrts / 3):
     //   [0, first_fake_constraint)          genuine input surface triangles
     //   [first_fake_constraint, first_edge_constraint)   hole-cap ("fake") triangles
-    //   [first_edge_constraint, first_point_constraint)  edge-forcing triangles (2/edge)
-    //   [first_point_constraint, first_virtual_constraint) point-forcing triangles (3/pt)
+    //   [first_edge_constraint, first_point_constraint)  edge-forcing triangles (0-2/edge)
+    //   [first_point_constraint, first_virtual_constraint) point-forcing triangles (points-only
+    //                                                        input, 3/pt)
     //   [first_virtual_constraint, end)      virtual (bounding-box) constraints
     // Caps/edge/point/virtual constraints carry no surface provenance and are excluded
     // from the surface tracking. When a category is empty its two bounds coincide.
     uint32_t first_fake_constraint;
     uint32_t first_edge_constraint;
     uint32_t first_point_constraint;
-    uint32_t num_edge_triangles; // 2 per inserted edge
-    uint32_t num_point_triangles; // 3 per inserted point
+    uint32_t num_edge_triangles; // see constraints_t
+    uint32_t num_point_triangles;
+    // Per forced edge its endpoints, per forced point its vertex (see constraints_t).
+    std::vector<uint32_t> feature_edge_vertices;
+    std::vector<uint32_t> feature_point_vertices;
     // Per real constraint: its triangle index in the input file (before degenerate
     // triangles were dropped). Empty if the input did not provide it.
     std::vector<uint32_t> constraint_original_index;
