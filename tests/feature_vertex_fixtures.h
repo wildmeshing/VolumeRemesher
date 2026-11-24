@@ -104,7 +104,8 @@ inline Result embed(
     const std::vector<double>& surface_coords,
     const std::vector<double>& edge_coords,
     const std::vector<uint32_t>& edge_indexes,
-    const std::vector<double>& point_coords)
+    const std::vector<double>& point_coords,
+    const std::vector<uint32_t>& surface_tris = cube_tris)
 {
     Result r;
     std::vector<uint32_t> poly_vindexes, cell_findexes, tets_parent, facets_on_input;
@@ -114,7 +115,7 @@ inline Result embed(
     std::vector<uint32_t> tri_group;
     vol_rem::embed_tri_in_poly_mesh(
         surface_coords,
-        cube_tris,
+        surface_tris,
         bg.coords,
         bg.tets,
         r.coords,

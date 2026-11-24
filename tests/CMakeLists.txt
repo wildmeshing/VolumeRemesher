@@ -163,8 +163,9 @@ endif()
 catch_discover_tests(unit_tests_3d)
 
 # Forced points and edges on a background that already has the surface's vertices, whose
-# forcing-triangle corners would leave the background, or at a boundary vertex of the background
-# with no inward axis direction (feature_vertex_regression.cpp).
+# forcing-triangle corners would leave the background, at a boundary vertex of the background
+# with no inward axis direction, or on the surface: along its creases and at its vertices they
+# change nothing, and inside a flat region they are still tiled (feature_vertex_regression.cpp).
 add_executable(feature_vertex_regression feature_vertex_regression.cpp feature_vertex_fixtures.h)
 target_link_libraries(feature_vertex_regression PRIVATE Catch2::Catch2WithMain VolumeRemesher::VolumeRemesher)
 target_compile_features(feature_vertex_regression PRIVATE cxx_std_20)

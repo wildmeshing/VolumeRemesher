@@ -37,9 +37,11 @@ namespace vol_rem {
 /// NOTE: M must be convex (the vertices are located by walking its adjacency), and every
 /// vertex of T and of the extra edges/points must lie strictly inside M -- not on its
 /// boundary -- unless it coincides with a vertex of M; a vertex on or outside the boundary
-/// is reported as an error. The forcing-triangle corners the extra features generate (at
-/// 0.1 x the edge length from an edge's endpoint, 0.1 x the point spacing from a point) are
-/// placed inside M automatically.
+/// is reported as an error. Each extra point becomes a vertex of the output. Each extra edge
+/// gets up to two forcing triangles through it -- none for an edge of T that the arrangement
+/// already has, i.e. one of a single triangle of T or of two that are not coplanar -- whose
+/// third corners (at 0.1 x the edge length from an endpoint) are placed inside M
+/// automatically.
 /// <param name="edge_vrt_coords">Vertex coordinates of the extra edges (x,y,z,...)</param>
 /// <param name="edge_indexes">Endpoint index pairs into edge_vrt_coords (e1_v1,e1_v2,...)</param>
 /// <param name="point_coords">Coordinates of the extra points (x,y,z,...)</param>

@@ -3,6 +3,8 @@
 
 #include "delaunay3d_wrapper.h"
 
+#include <vector>
+
 #define CONSTR_GROUP_T uint32_t
 #define CONSTR_A 0
 #define CONSTR_B 1
@@ -32,12 +34,18 @@ public:
     // tracked. Length = number of real (non-virtual) constraints (input + hole caps).
     uint32_t num_input_triangles; // number of genuine input surface constraints. Extra
     // constraints are appended after these in a fixed order: hole caps, then edge-forcing
-    // triangles (2 per input edge), then point-forcing triangles (3 per input point), then
+    // triangles (0 to 2 per input edge), then point-forcing triangles (3 per input point, only
+    // when the points are the whole input), then
     // the virtual (bounding-box) constraints. UINT32_MAX means "unset" (no caps/edges/points
     // added); callers then treat every real constraint as input surface. It can legitimately
     // be 0 (edges/points but no surface triangles), which is why the sentinel is not 0.
-    uint32_t num_edge_triangles; // 2 per inserted edge (see insert_edges_and_points)
-    uint32_t num_point_triangles; // 3 per inserted point
+    uint32_t num_edge_triangles; // edge-forcing triangles (see insert_edges_and_points)
+    uint32_t num_point_triangles; // point-forcing triangles
+    // Per forced edge its two endpoints, per forced point its vertex, as mesh vertex ids
+    // (filled by insert_edges_and_points). The provenance reads the features from here: a
+    // feature can have no forcing triangle to read them from.
+    std::vector<uint32_t> feature_edge_vertices;
+    std::vector<uint32_t> feature_point_vertices;
 
     constraints_t()
         : tri_vertices(NULL)
@@ -83,14 +91,21 @@ struct extra_features_t
     uint32_t n_points = 0;
 };
 
-// Force the given edges and points to appear in the output tetrahedralization by
-// adding, per edge, two triangles that share edge AB (pinning it), and per point, three
-// triangles that share only vertex P (pinning it). The third corner of each triangle is at
-// a displacement L = 0.1 x |AB| (edges) or 0.1 x the point spacing (points) from A / P
-// along a coordinate axis: the two largest-area triangles among (A, B, A + L e_{x,y,z})
-// for an edge, the "corner" triangles (P, P + L e_i, P + L e_j) for a point. New vertices
-// are appended to the mesh and the forcing triangles to the constraints
-// (num_edge_triangles / num_point_triangles record the counts). Must run before the
+// Force the given edges and points to appear in the output tetrahedralization. A point is
+// appended to the mesh as a vertex, which makes it a vertex of the arrangement. An edge AB
+// gets the triangles that pin it, sharing AB:
+//  - none if it is an edge of the constraints already (the surface, hole caps) that the
+//    arrangement has: an edge of exactly one constraint (it gets a virtual constraint) or of
+//    two that are not coplanar (their planes cross along it);
+//  - one if it is an edge of constraints that are all coplanar (inside a flat region), with
+//    its third corner along the axis of their plane's largest normal component;
+//  - otherwise two, the two largest-area triangles among (A, B, A + L e_{x,y,z}).
+// The third corners are at a displacement L = 0.1 x |AB| from A. When the points are the
+// whole input (no surface, no edge triangles) each gets the "corner" triangles
+// (P, P + L e_i, P + L e_j), L = 0.1 x the point spacing, as the arrangement needs a
+// constraint. New vertices are appended to the mesh and the forcing triangles to the
+// constraints (num_edge_triangles / num_point_triangles record the counts, and
+// feature_edge_vertices / feature_point_vertices the features). Must run before the
 // Delaunay permutation and place_virtual_constraints.
 //
 // num_tet_mesh_vertices: when embedding into a given tet mesh (remakePolyhedralMesh), the
@@ -103,7 +118,8 @@ struct extra_features_t
 // when no axis direction fits (the base point is a boundary vertex of the mesh whose inward
 // cone holds none, e.g. the apex of a rotated tet) the corners are taken inside a tet that
 // holds the base point instead. Either way the triangles still share only AB (only P), so
-// they pin it the same way. The mesh must be convex: see locate_point.
+// they pin it the same way; a flat edge's one corner is also kept off its plane. The mesh must
+// be convex: see locate_point.
 void insert_edges_and_points(
     constraints_t* constraints,
     TetMesh* mesh,
